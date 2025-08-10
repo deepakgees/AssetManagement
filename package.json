@@ -1,0 +1,19 @@
+{
+  "name": "zerodha-portfolio-tracker",
+  "version": "1.0.0",
+  "description": "Multi-account Zerodha portfolio tracking application",
+  "scripts": {
+    "dev": "concurrently \"npm run dev:backend\" \"npm run dev:frontend\"",
+    "dev:backend": "cd backend && npm run dev",
+    "dev:frontend": "cd frontend && npm start",
+    "install:all": "npm install && cd backend && npm install && cd ../frontend && npm install",
+    "build": "cd backend && npm run build && cd ../frontend && npm run build",
+    "test": "cd frontend && npm test"
+  },
+  "keywords": ["zerodha", "portfolio", "trading", "tracker"],
+  "author": "Your Name",
+  "license": "MIT",
+  "devDependencies": {
+    "concurrently": "^8.2.2"
+  }
+} 

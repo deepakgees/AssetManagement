@@ -1,0 +1,101 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id        Int       @id @default(autoincrement())
+  email     String    @unique
+  password  String
+  name      String
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  accounts  Account[]
+
+  @@map("users")
+}
+
+model Account {
+  id           Int                 @id @default(autoincrement())
+  name         String
+  apiKey       String?
+  description  String?
+  isActive     Boolean             @default(true)
+  lastSync     DateTime            @default(now())
+  createdAt    DateTime            @default(now())
+  updatedAt    DateTime            @updatedAt
+  userId       Int?
+  apiSecret    String?
+  requestToken String?
+  user         User?               @relation(fields: [userId], references: [id], onDelete: Cascade)
+  holdings     Holding[]
+  snapshots    PortfolioSnapshot[]
+  positions    Position[]
+
+  @@map("accounts")
+}
+
+model Holding {
+  id                 Int      @id @default(autoincrement())
+  tradingSymbol      String
+  quantity           Int
+  averagePrice       Float
+  lastPrice          Float
+  marketValue        Float
+  pnl                Float
+  pnlPercentage      Float
+  exchange           String
+  sector             String?
+  accountId          Int
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+  instrumentToken    Int?
+  isin               String?
+  product            String?
+  collateralQuantity Int?
+  collateralType     String?
+  t1Quantity         Int?
+  realisedQuantity   Int?
+  account            Account  @relation(fields: [accountId], references: [id], onDelete: Cascade)
+
+  @@map("holdings")
+}
+
+model Position {
+  id            Int      @id @default(autoincrement())
+  tradingSymbol String
+  quantity      Int
+  averagePrice  Float
+  lastPrice     Float
+  marketValue   Float
+  pnl           Float
+  pnlPercentage Float
+  exchange      String
+  product       String
+  side          String
+  accountId     Int
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+  account       Account  @relation(fields: [accountId], references: [id], onDelete: Cascade)
+
+  @@map("positions")
+}
+
+model PortfolioSnapshot {
+  id                 Int      @id @default(autoincrement())
+  totalValue         Float
+  totalPnL           Float
+  totalPnLPercentage Float
+  cashBalance        Float
+  marginUsed         Float
+  availableMargin    Float
+  accountId          Int
+  createdAt          DateTime @default(now())
+  account            Account  @relation(fields: [accountId], references: [id], onDelete: Cascade)
+
+  @@map("portfolio_snapshots")
+}
