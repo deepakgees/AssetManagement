@@ -66,7 +66,7 @@ npm run install:all
 Create a `.env` file in the root directory:
 ```env
 # Database
-DATABASE_URL="postgresql://username:password@localhost:5432/zerodha_portfolio"
+DATABASE_URL="postgresql://username:password@localhost:5432/assetManagement"
 
 # Server
 PORT=7001

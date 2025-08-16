@@ -12,6 +12,7 @@ import accountRoutes from './routes/accounts';
 import holdingsRoutes from './routes/holdings';
 import positionsRoutes from './routes/positions';
 import portfolioRoutes from './routes/portfolio';
+import marginsRoutes from './routes/margins';
 
 // Load environment variables
 dotenv.config();
@@ -59,6 +60,7 @@ app.use('/api/accounts', accountRoutes);
 app.use('/api/holdings', holdingsRoutes);
 app.use('/api/positions', positionsRoutes);
 app.use('/api/portfolio', portfolioRoutes);
+app.use('/api/margins', marginsRoutes);
 
 // Error handling middleware
 app.use(errorLogger);
@@ -100,6 +102,11 @@ process.on('SIGINT', async () => {
 
 // Uncaught exception handler
 process.on('uncaughtException', (err) => {
+  console.error('=== UNCAUGHT EXCEPTION DETECTED ===');
+  console.error('Error:', err.message);
+  console.error('Stack:', err.stack);
+  console.error('====================================');
+  
   logger.error('Uncaught Exception', {
     error: {
       message: err.message,
@@ -107,7 +114,11 @@ process.on('uncaughtException', (err) => {
       name: err.name,
     },
   });
-  process.exit(1);
+  
+  // Give logger time to write before exit
+  setTimeout(() => {
+    process.exit(1);
+  }, 1000);
 });
 
 // Unhandled rejection handler

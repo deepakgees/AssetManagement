@@ -5,7 +5,6 @@ import {
   HomeIcon,
   ChartBarIcon,
   CurrencyDollarIcon,
-  CogIcon,
   UserGroupIcon,
   Bars3Icon,
   XMarkIcon,
@@ -28,7 +27,7 @@ const navigation = [
   { name: 'P&L', href: '/pnl', icon: CurrencyDollarIcon },
   { name: 'Analytics', href: '/analytics', icon: ChartBarIcon },
   { name: 'Accounts', href: '/accounts', icon: UserGroupIcon },
-  { name: 'Settings', href: '/settings', icon: CogIcon },
+
 ];
 
 export default function Layout({ children, title, showRefresh = false, onRefresh }: LayoutProps) {

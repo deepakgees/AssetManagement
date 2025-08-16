@@ -18,6 +18,7 @@ import {
 import Layout from '../components/Layout';
 import { getPositions, getPositionsSummary, type Position } from '../services/positionsService';
 import { getAccounts, type Account } from '../services/accountsService';
+import { getMarginsSummary, type Margin } from '../services/marginsService';
 
 export default function Positions() {
   const [selectedAccountId, setSelectedAccountId] = useState<number | null>(null);
@@ -72,6 +73,13 @@ export default function Positions() {
     enabled: !!accounts && accounts.length > 0,
   });
 
+  // Get margins summary for all accounts
+  const { data: marginsSummary } = useQuery({
+    queryKey: ['margins-summary'],
+    queryFn: getMarginsSummary,
+    enabled: !!accounts && accounts.length > 0,
+  });
+
   const formatCurrency = (amount: number) => {
     return new Intl.NumberFormat('en-IN', {
       style: 'currency',
@@ -104,6 +112,14 @@ export default function Positions() {
 
   const getSideColor = (side: string) => {
     return side === 'BUY' ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800';
+  };
+
+  // Helper function to get available margin for an account
+  const getAvailableMargin = (accountId: number): number => {
+    if (!marginsSummary) return 0;
+    const margin = marginsSummary.find(m => m.accountId === accountId);
+    if (!margin) return 0;
+    return margin.liquidCollateral + margin.stockCollateral;
   };
 
   const handleAccountClick = (accountId: number) => {
@@ -187,6 +203,9 @@ export default function Positions() {
                          Max Profit
                        </th>
                        <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                         Available Margin
+                       </th>
+                       <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
                          Last Sync
                        </th>
                        <th className="px-6 py-3 text-center text-xs font-medium text-gray-500 uppercase tracking-wider">
@@ -198,6 +217,7 @@ export default function Positions() {
                                          {accounts.map((account) => {
                        const accountSummary = allAccountsSummary?.[account.id];
                        const maxProfit = accountSummary?.summary?.totalMarketValue || 0;
+                       const availableMargin = getAvailableMargin(account.id);
                        
                        return (
                          <tr key={account.id} className="hover:bg-gray-50">
@@ -206,6 +226,9 @@ export default function Positions() {
                            </td>
                            <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
                              {formatCurrency(-maxProfit)}
+                           </td>
+                           <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
+                             {formatCurrency(availableMargin)}
                            </td>
                            <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
                              {account.lastSync ? (

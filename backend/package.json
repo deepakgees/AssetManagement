@@ -4,7 +4,8 @@
   "description": "Backend for Zerodha Portfolio Tracker",
   "main": "dist/index.js",
   "scripts": {
-    "dev": "nodemon src/index.ts",
+    "dev": "nodemon --config nodemon.json",
+    "dev:direct": "ts-node src/index.ts",
     "debug": "node --inspect --require ts-node/register src/index.ts",
     "debug-brk": "node --inspect-brk --require ts-node/register src/index.ts",
     "build": "tsc",

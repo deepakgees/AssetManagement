@@ -8,7 +8,7 @@ import Positions from './pages/Positions';
 import PnL from './pages/PnL';
 import Analytics from './pages/Analytics';
 import Accounts from './pages/Accounts';
-import Settings from './pages/Settings';
+
 
 // Create React Query client
 const queryClient = new QueryClient({
@@ -32,7 +32,7 @@ function App() {
             <Route path="/pnl" element={<PnL />} />
             <Route path="/analytics" element={<Analytics />} />
             <Route path="/accounts" element={<Accounts />} />
-            <Route path="/settings" element={<Settings />} />
+
           </Routes>
         </div>
       </Router>

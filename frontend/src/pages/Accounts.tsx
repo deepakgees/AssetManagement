@@ -318,10 +318,7 @@ export default function Accounts() {
                        <ArrowTopRightOnSquareIcon className={`h-4 w-4 ${getLoginUrlMutation.isPending ? 'animate-spin' : ''}`} />
                      </button>
                      <button
-                       onClick={() => {
-                         const accessToken = prompt('Please enter the access token from the login flow (optional - will use stored request token if available):');
-                         syncAccountMutation.mutate({ id: account.id, accessToken: accessToken || undefined });
-                       }}
+                       onClick={() => syncAccountMutation.mutate({ id: account.id })}
                        disabled={syncAccountMutation.isPending}
                        className={`mr-3 ${syncAccountMutation.isPending ? 'text-gray-400 cursor-not-allowed' : 'text-green-600 hover:text-green-900'}`}
                        title="Sync Holdings & Positions"

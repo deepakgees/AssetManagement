@@ -56,15 +56,15 @@ echo "🗄️  Setting up database..."
 # Check if PostgreSQL is running
 if command -v psql &> /dev/null; then
     echo "Creating database..."
-    psql -U postgres -c "CREATE DATABASE zerodha_portfolio;" 2>/dev/null || echo "Database might already exist"
+    psql -U postgres -c "CREATE DATABASE assetManagement;" 2>/dev/null || echo "Database might already exist"
     
     echo "Running schema..."
-    psql -U postgres -d zerodha_portfolio -f database/schema.sql 2>/dev/null || echo "Schema might already be applied"
+    psql -U postgres -d assetManagement -f database/schema.sql 2>/dev/null || echo "Schema might already be applied"
     
     echo "✅ Database setup completed"
 else
     echo "⚠️  PostgreSQL not found. Please install PostgreSQL and run the schema manually:"
-    echo "   psql -U postgres -d zerodha_portfolio -f database/schema.sql"
+    echo "   psql -U postgres -d assetManagement -f database/schema.sql"
 fi
 
 

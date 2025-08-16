@@ -122,7 +122,7 @@ router.get('/:id', async (req: Request, res: Response) => {
 // Create new holding (for testing/demo purposes)
 router.post('/', async (req: Request, res: Response) => {
   try {
-    const { tradingSymbol, quantity, averagePrice, lastPrice, exchange, sector, accountId } = req.body;
+    const { tradingSymbol, quantity, collateralQuantity, averagePrice, lastPrice, exchange, sector, accountId } = req.body;
 
     // Verify account exists
     const account = await prisma.account.findFirst({
@@ -135,14 +135,16 @@ router.post('/', async (req: Request, res: Response) => {
       return res.status(404).json({ error: 'Account not found' });
     }
 
-    const marketValue = quantity * lastPrice;
-    const pnl = marketValue - (quantity * averagePrice);
-    const pnlPercentage = (quantity * averagePrice) > 0 ? (pnl / (quantity * averagePrice)) * 100 : 0;
+    const totalQuantity = quantity + (collateralQuantity || 0);
+    const marketValue = totalQuantity * lastPrice;
+    const pnl = marketValue - (totalQuantity * averagePrice);
+    const pnlPercentage = (totalQuantity * averagePrice) > 0 ? (pnl / (totalQuantity * averagePrice)) * 100 : 0;
 
     const holding = await prisma.holding.create({
       data: {
         tradingSymbol,
         quantity,
+        collateralQuantity: collateralQuantity || 0,
         averagePrice,
         lastPrice,
         marketValue,
@@ -167,7 +169,7 @@ router.post('/', async (req: Request, res: Response) => {
 // Update holding
 router.put('/:id', async (req: Request, res: Response) => {
   try {
-    const { tradingSymbol, quantity, averagePrice, lastPrice, exchange, sector } = req.body;
+    const { tradingSymbol, quantity, collateralQuantity, averagePrice, lastPrice, exchange, sector } = req.body;
     const holdingId = parseInt(req.params.id);
 
     // Check if holding exists
@@ -181,15 +183,17 @@ router.put('/:id', async (req: Request, res: Response) => {
       return res.status(404).json({ error: 'Holding not found' });
     }
 
-    const marketValue = quantity * lastPrice;
-    const pnl = marketValue - (quantity * averagePrice);
-    const pnlPercentage = (quantity * averagePrice) > 0 ? (pnl / (quantity * averagePrice)) * 100 : 0;
+    const totalQuantity = quantity + (collateralQuantity || 0);
+    const marketValue = totalQuantity * lastPrice;
+    const pnl = marketValue - (totalQuantity * averagePrice);
+    const pnlPercentage = (totalQuantity * averagePrice) > 0 ? (pnl / (totalQuantity * averagePrice)) * 100 : 0;
 
     const updatedHolding = await prisma.holding.update({
       where: { id: holdingId },
       data: {
         tradingSymbol,
         quantity,
+        collateralQuantity: collateralQuantity || 0,
         averagePrice,
         lastPrice,
         marketValue,

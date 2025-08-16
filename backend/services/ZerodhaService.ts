@@ -297,7 +297,7 @@ export async function syncHoldings(existingAccount: any) {
             quantity: holding.quantity,
             averagePrice: holding.average_price,
             lastPrice: holding.last_price,
-            marketValue: holding.last_price * holding.quantity,
+            marketValue: holding.last_price * (holding.quantity + (holding.collateral_quantity || 0)),
             pnl: holding.pnl,
             pnlPercentage: holding.day_change_percentage,
             instrumentToken: holding.instrument_token,
@@ -430,16 +430,49 @@ export async function syncPositions(existingAccount: any) {
 }
 
 // Export function to get margins
-export async function getMargins(apiKey: string, requestToken: string, apiSecret: string, segment?: 'equity' | 'commodity') {
-    try {
-        initializeKiteConnect(apiKey, requestToken, apiSecret);
-        const margins = await kc.getMargins(segment);
-        console.log('Margins:', margins);
+export async function syncMargins(existingAccount: any) {
+    return executeWithRetry(async () => {
+        console.log('Fetching margins for account:', existingAccount.id);
+        const margins = await kc!.getMargins('equity');
+        console.log('Raw margins data:', margins);
+        
+        // Extract the utilized portion of margins data
+        const marginData = {
+            accountId: existingAccount.id,
+            segment: margins.segment || 'EQUITY',
+            enabled: margins.enabled || true,
+            net: parseFloat(margins.net || 0),
+            debits: parseFloat(margins.utilised?.debits || 0),
+            payout: parseFloat(margins.utilised?.payout || 0),
+            liquidCollateral: parseFloat(margins.utilised?.liquid_collateral || 0),
+            stockCollateral: parseFloat(margins.utilised?.stock_collateral || 0),
+            span: parseFloat(margins.utilised?.span || 0),
+            exposure: parseFloat(margins.utilised?.exposure || 0),
+            additional: parseFloat(margins.utilised?.additional || 0),
+            delivery: parseFloat(margins.utilised?.delivery || 0),
+            optionPremium: parseFloat(margins.utilised?.option_premium || 0),
+            holdingSales: parseFloat(margins.utilised?.holding_sales || 0),
+            turnover: parseFloat(margins.utilised?.turnover || 0),
+            equity: parseFloat(margins.utilised?.equity || 0),
+            m2mRealised: parseFloat(margins.utilised?.m2m_realised || 0),
+            m2mUnrealised: parseFloat(margins.utilised?.m2m_unrealised || 0),
+            createdAt: new Date(),
+            updatedAt: new Date(),
+        };
+        
+        // Clear existing margins for this account
+        await prisma.margin.deleteMany({
+            where: { accountId: existingAccount.id }
+        });
+        
+        // Insert new margin data
+        await prisma.margin.create({
+            data: marginData
+        });
+        
+        console.log(`Successfully synced margins for account ${existingAccount.id}`);
         return margins;
-    } catch (err) {
-        console.error('Error getting margins:', err);
-        throw err;
-    }
+    }, existingAccount);
 }
 
 // Export function to get instruments
