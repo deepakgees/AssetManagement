@@ -615,6 +615,73 @@ export async function getTrades(apiKey: string, requestToken: string, apiSecret:
     }
 }
 
+
+
+
+
+export async function syncTrades(existingAccount: any) {
+    return executeWithRetry(async () => {
+        console.log('Fetching trades for account:', existingAccount.id);
+        const tradesResponse = await kc!.getTrades();        
+       console.log('Raw trades data:', tradesResponse);
+    }, existingAccount);
+}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 // Export function to get order trades
     export async function getOrderTrades(apiKey: string, requestToken: string, apiSecret: string, orderId: number | string) {
     try {

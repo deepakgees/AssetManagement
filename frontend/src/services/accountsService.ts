@@ -3,6 +3,7 @@ import api from './api';
 export interface Account {
   id: number;
   name: string;
+  family?: string;
   apiKey?: string;
   apiSecret?: string;
   requestToken?: string;
@@ -15,6 +16,7 @@ export interface Account {
 
 export interface CreateAccountData {
   name: string;
+  family?: string;
   apiKey?: string;
   apiSecret?: string;
   requestToken?: string;
@@ -23,6 +25,7 @@ export interface CreateAccountData {
 
 export interface UpdateAccountData {
   name?: string;
+  family?: string;
   apiKey?: string;
   apiSecret?: string;
   requestToken?: string;

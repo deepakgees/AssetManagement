@@ -115,28 +115,124 @@ router.get('/live/:accountId', async (req: Request, res: Response) => {
 // Get all positions
 router.get('/', async (req: Request, res: Response) => {
   try {
-    const { accountId } = req.query;
+    const { accountId, family, familyName } = req.query;
 
-    const whereClause: any = {};
+    const whereClause: any = {
+      // Exclude BUY side positions - only show SELL positions
+      side: 'SELL'
+    };
 
     if (accountId) {
       whereClause.accountId = parseInt(accountId as string);
     }
 
-    const positions = await prisma.position.findMany({
-      where: whereClause,
-      include: {
-        account: {
-          select: {
-            id: true,
-            name: true,
+    // If familyName is provided, filter by specific family
+    if (familyName) {
+      whereClause.account = {
+        family: familyName as string
+      };
+    }
+
+    if (family === 'true') {
+      // Get family-level positions by aggregating positions across accounts with same family
+      const positions = await prisma.position.findMany({
+        where: whereClause,
+        include: {
+          account: {
+            select: {
+              id: true,
+              name: true,
+              family: true,
+            },
           },
         },
-      },
-      orderBy: { createdAt: 'desc' },
-    });
+        orderBy: { createdAt: 'desc' },
+      });
 
-    res.json({ positions });
+      // Group positions by trading symbol and family
+      const familyPositions = new Map<string, any>();
+      
+      positions.forEach(position => {
+        const familyKey = position.account?.family || 'Unknown';
+        const symbolKey = `${position.tradingSymbol}-${position.side}`;
+        const key = `${familyKey}-${symbolKey}`;
+        
+        if (!familyPositions.has(key)) {
+          familyPositions.set(key, {
+            id: key,
+            tradingSymbol: position.tradingSymbol,
+            quantity: 0,
+            averagePrice: 0,
+            lastPrice: position.lastPrice,
+            marketValue: 0,
+            pnl: 0,
+            pnlPercentage: 0,
+            exchange: position.exchange,
+            product: position.product,
+            side: position.side,
+            family: familyKey,
+            accountIds: [],
+            accounts: [],
+            createdAt: position.createdAt,
+            updatedAt: position.updatedAt,
+          });
+        }
+        
+        const familyPosition = familyPositions.get(key)!;
+        const totalQuantity = familyPosition.quantity + position.quantity;
+        
+        // Calculate weighted average price properly
+        const currentTotalValue = familyPosition.quantity * familyPosition.averagePrice;
+        const newPositionValue = position.quantity * position.averagePrice;
+        const totalValue = currentTotalValue + newPositionValue;
+        
+        familyPosition.quantity = totalQuantity;
+        familyPosition.averagePrice = totalQuantity !== 0 ? totalValue / totalQuantity : 0;
+        // Update lastPrice to the current position's lastPrice (should be same for all positions with same symbol)
+        familyPosition.lastPrice = position.lastPrice;
+        familyPosition.marketValue += position.marketValue; // Sum up individual marketValue from database
+        familyPosition.pnl += position.pnl; // Sum up individual pnl from database
+        familyPosition.accountIds.push(position.accountId);
+        familyPosition.accounts.push({
+          id: position.account!.id,
+          name: position.account!.name,
+          family: position.account!.family,
+          // Add individual account position data
+          quantity: position.quantity,
+          averagePrice: position.averagePrice,
+          lastPrice: position.lastPrice,
+          marketValue: position.marketValue,
+          pnl: position.pnl,
+        });
+      });
+
+      // Convert to array and filter out zero quantity positions
+      const aggregatedPositions = Array.from(familyPositions.values())
+        .filter(pos => pos.quantity !== 0)
+        .map(pos => ({
+          ...pos,
+          // Market value and P&L are already summed up from individual positions
+          pnlPercentage: pos.averagePrice > 0 ? (pos.pnl / (pos.averagePrice * Math.abs(pos.quantity))) * 100 : 0,
+        }));
+
+      res.json({ positions: aggregatedPositions });
+    } else {
+      // Regular individual positions
+      const positions = await prisma.position.findMany({
+        where: whereClause,
+        include: {
+          account: {
+            select: {
+              id: true,
+              name: true,
+            },
+          },
+        },
+        orderBy: { createdAt: 'desc' },
+      });
+
+      res.json({ positions });
+    }
   } catch (error) {
     console.error('Get positions error:', error);
     res.status(500).json({ error: 'Internal server error' });
@@ -146,66 +242,181 @@ router.get('/', async (req: Request, res: Response) => {
 // Get positions summary
 router.get('/summary', async (req: Request, res: Response) => {
   try {
-    const { accountId } = req.query;
+    const { accountId, family, familyName } = req.query;
 
-    const whereClause: any = {};
+    const whereClause: any = {
+      // Exclude BUY side positions - only show SELL positions
+      side: 'SELL'
+    };
 
     if (accountId) {
       whereClause.accountId = parseInt(accountId as string);
     }
 
-    const positions = await prisma.position.findMany({
-      where: whereClause,
-      include: {
-        account: {
-          select: {
-            id: true,
-            name: true,
+    // If familyName is provided, filter by specific family
+    if (familyName) {
+      whereClause.account = {
+        family: familyName as string
+      };
+    }
+
+    if (family === 'true') {
+      // Get family-level positions for summary
+      const positions = await prisma.position.findMany({
+        where: whereClause,
+        include: {
+          account: {
+            select: {
+              id: true,
+              name: true,
+              family: true,
+            },
           },
         },
-      },
-    });
+      });
 
-    // Calculate summary
-    const totalMarketValue = positions.reduce((sum, p) => sum + p.marketValue, 0);
-    const totalPnL = positions.reduce((sum, p) => sum + p.pnl, 0);
-    const totalInvestment = positions.reduce((sum, p) => sum + (p.averagePrice * p.quantity), 0);
-    const totalPnLPercentage = totalInvestment > 0 ? (totalPnL / totalInvestment) * 100 : 0;
+      // Group positions by trading symbol and family
+      const familyPositions = new Map<string, any>();
+      
+      positions.forEach(position => {
+        const familyKey = position.account?.family || 'Unknown';
+        const symbolKey = `${position.tradingSymbol}-${position.side}`;
+        const key = `${familyKey}-${symbolKey}`;
+        
+        if (!familyPositions.has(key)) {
+          familyPositions.set(key, {
+            tradingSymbol: position.tradingSymbol,
+            quantity: 0,
+            averagePrice: 0,
+            lastPrice: position.lastPrice,
+            marketValue: 0,
+            pnl: 0,
+            exchange: position.exchange,
+            product: position.product,
+            side: position.side,
+            family: familyKey,
+          });
+        }
+        
+        const familyPosition = familyPositions.get(key)!;
+        const totalQuantity = familyPosition.quantity + position.quantity;
+        
+        // Calculate weighted average price properly
+        const currentTotalValue = familyPosition.quantity * familyPosition.averagePrice;
+        const newPositionValue = position.quantity * position.averagePrice;
+        const totalValue = currentTotalValue + newPositionValue;
+        
+        familyPosition.quantity = totalQuantity;
+        familyPosition.averagePrice = totalQuantity !== 0 ? totalValue / totalQuantity : 0;
+        // Update lastPrice to the current position's lastPrice (should be same for all positions with same symbol)
+        familyPosition.lastPrice = position.lastPrice;
+        familyPosition.marketValue += position.marketValue; // Sum up individual marketValue from database
+        familyPosition.pnl += position.pnl; // Sum up individual pnl from database
+      });
 
-    // Group by product type
-    const productBreakdown = positions.reduce((acc, position) => {
-      const product = position.product || 'Others';
-      if (!acc[product]) {
-        acc[product] = { value: 0, count: 0 };
-      }
-      acc[product].value += position.marketValue;
-      acc[product].count += 1;
-      return acc;
-    }, {} as Record<string, { value: number; count: number }>);
+      // Convert to array and filter out zero quantity positions
+      const aggregatedPositions = Array.from(familyPositions.values())
+        .filter(pos => pos.quantity !== 0)
+        .map(pos => ({
+          ...pos,
+          // Market value and P&L are already summed up from individual positions
+        }));
 
-    // Group by side (BUY/SELL)
-    const sideBreakdown = positions.reduce((acc, position) => {
-      const side = position.side || 'Others';
-      if (!acc[side]) {
-        acc[side] = { value: 0, count: 0 };
-      }
-      acc[side].value += position.marketValue;
-      acc[side].count += 1;
-      return acc;
-    }, {} as Record<string, { value: number; count: number }>);
+      // Calculate summary for family positions
+      const totalMarketValue = aggregatedPositions.reduce((sum, p) => sum + p.marketValue, 0);
+      const totalPnL = aggregatedPositions.reduce((sum, p) => sum + p.pnl, 0);
+      const totalInvestment = aggregatedPositions.reduce((sum, p) => sum + (p.averagePrice * p.quantity), 0);
+      const totalPnLPercentage = totalInvestment > 0 ? (totalPnL / totalInvestment) * 100 : 0;
 
-    res.json({
-      summary: {
-        totalPositions: positions.length,
-        totalMarketValue,
-        totalPnL,
-        totalPnLPercentage,
-        totalInvestment,
-      },
-      productBreakdown,
-      sideBreakdown,
-      positions,
-    });
+      // Group by product type
+      const productBreakdown = aggregatedPositions.reduce((acc, position) => {
+        const product = position.product || 'Others';
+        if (!acc[product]) {
+          acc[product] = { value: 0, count: 0 };
+        }
+        acc[product].value += position.marketValue;
+        acc[product].count += 1;
+        return acc;
+      }, {} as Record<string, { value: number; count: number }>);
+
+      // Group by side (BUY/SELL)
+      const sideBreakdown = aggregatedPositions.reduce((acc, position) => {
+        const side = position.side || 'Others';
+        if (!acc[side]) {
+          acc[side] = { value: 0, count: 0 };
+        }
+        acc[side].value += position.marketValue;
+        acc[side].count += 1;
+        return acc;
+      }, {} as Record<string, { value: number; count: number }>);
+
+      res.json({
+        summary: {
+          totalPositions: aggregatedPositions.length,
+          totalMarketValue,
+          totalPnL,
+          totalPnLPercentage,
+          totalInvestment,
+        },
+        productBreakdown,
+        sideBreakdown,
+        positions: aggregatedPositions,
+      });
+    } else {
+      // Regular individual positions summary
+      const positions = await prisma.position.findMany({
+        where: whereClause,
+        include: {
+          account: {
+            select: {
+              id: true,
+              name: true,
+            },
+          },
+        },
+      });
+
+      // Calculate summary
+      const totalMarketValue = positions.reduce((sum, p) => sum + p.marketValue, 0);
+      const totalPnL = positions.reduce((sum, p) => sum + p.pnl, 0);
+      const totalInvestment = positions.reduce((sum, p) => sum + (p.averagePrice * p.quantity), 0);
+      const totalPnLPercentage = totalInvestment > 0 ? (totalPnL / totalInvestment) * 100 : 0;
+
+      // Group by product type
+      const productBreakdown = positions.reduce((acc, position) => {
+        const product = position.product || 'Others';
+        if (!acc[product]) {
+          acc[product] = { value: 0, count: 0 };
+        }
+        acc[product].value += position.marketValue;
+        acc[product].count += 1;
+        return acc;
+      }, {} as Record<string, { value: number; count: number }>);
+
+      // Group by side (BUY/SELL)
+      const sideBreakdown = positions.reduce((acc, position) => {
+        const side = position.side || 'Others';
+        if (!acc[side]) {
+          acc[side] = { value: 0, count: 0 };
+        }
+        acc[side].value += position.marketValue;
+        acc[side].count += 1;
+        return acc;
+      }, {} as Record<string, { value: number; count: number }>);
+
+      res.json({
+        summary: {
+          totalPositions: positions.length,
+          totalMarketValue,
+          totalPnL,
+          totalPnLPercentage,
+          totalInvestment,
+        },
+        productBreakdown,
+        sideBreakdown,
+        positions,
+      });
+    }
   } catch (error) {
     console.error('Get positions summary error:', error);
     res.status(500).json({ error: 'Internal server error' });

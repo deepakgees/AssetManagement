@@ -1,7 +1,6 @@
 import express from 'express';
 import cors from 'cors';
 import helmet from 'helmet';
-import rateLimit from 'express-rate-limit';
 import dotenv from 'dotenv';
 import { LoggedPrismaClient } from './utils/dbLogger';
 import logger from './utils/logger';
@@ -13,6 +12,7 @@ import holdingsRoutes from './routes/holdings';
 import positionsRoutes from './routes/positions';
 import portfolioRoutes from './routes/portfolio';
 import marginsRoutes from './routes/margins';
+import captureTokenRoutes from './routes/captureToken';
 
 // Load environment variables
 dotenv.config();
@@ -23,14 +23,6 @@ const PORT = process.env.PORT || 7001;
 
 // Security middleware
 app.use(helmet());
-
-// Rate limiting
-const limiter = rateLimit({
-  windowMs: 15 * 60 * 1000, // 15 minutes
-  max: 100, // limit each IP to 100 requests per windowMs
-  message: 'Too many requests from this IP, please try again later.',
-});
-app.use('/api/', limiter);
 
 // CORS configuration
 app.use(cors({
@@ -61,6 +53,15 @@ app.use('/api/holdings', holdingsRoutes);
 app.use('/api/positions', positionsRoutes);
 app.use('/api/portfolio', portfolioRoutes);
 app.use('/api/margins', marginsRoutes);
+app.use('/api/captureToken', captureTokenRoutes);
+
+// Direct auth routes (for easier redirect handling) - must be before 404 handler
+app.use('/captureToken', captureTokenRoutes);
+
+// Debug route to test if auth routes are working
+app.get('/test-auth', (req, res) => {
+  res.json({ message: 'Auth routes are working' });
+});
 
 // Error handling middleware
 app.use(errorLogger);

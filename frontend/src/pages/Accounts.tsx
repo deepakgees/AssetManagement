@@ -28,6 +28,7 @@ interface Message {
 
 interface AccountFormData {
   name: string;
+  family: string;
   apiKey: string;
   apiSecret: string;
   requestToken: string;
@@ -41,6 +42,7 @@ export default function Accounts() {
   const [messages, setMessages] = useState<Message[]>([]);
   const [formData, setFormData] = useState<AccountFormData>({
     name: '',
+    family: '',
     apiKey: '',
     apiSecret: '',
     requestToken: '',
@@ -154,6 +156,7 @@ export default function Accounts() {
       setEditingAccount(account);
       setFormData({
         name: account.name,
+        family: account.family || '',
         apiKey: account.apiKey || '',
         apiSecret: account.apiSecret || '',
         requestToken: account.requestToken || '',
@@ -163,6 +166,7 @@ export default function Accounts() {
       setEditingAccount(null);
       setFormData({
         name: '',
+        family: '',
         apiKey: '',
         apiSecret: '',
         requestToken: '',
@@ -177,6 +181,7 @@ export default function Accounts() {
     setEditingAccount(null);
     setFormData({
       name: '',
+      family: '',
       apiKey: '',
       apiSecret: '',
       requestToken: '',
@@ -194,6 +199,7 @@ export default function Accounts() {
       updateAccountMutation.mutate({
         id: editingAccount.id,
         name: formData.name,
+        family: formData.family,
         apiKey: formData.apiKey,
         apiSecret: formData.apiSecret,
         requestToken: formData.requestToken,
@@ -202,6 +208,7 @@ export default function Accounts() {
     } else {
       addAccountMutation.mutate({
         name: formData.name,
+        family: formData.family,
         apiKey: formData.apiKey,
         apiSecret: formData.apiSecret,
         requestToken: formData.requestToken,
@@ -275,6 +282,9 @@ export default function Accounts() {
                   Account Name
                 </th>
                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                  Family
+                </th>
+                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
                   Last Sync
                 </th>
                 <th className="px-6 py-3 text-center text-xs font-medium text-gray-500 uppercase tracking-wider">
@@ -287,6 +297,9 @@ export default function Accounts() {
                 <tr key={account.id} className="hover:bg-gray-50">
                   <td className="px-6 py-4 whitespace-nowrap">
                     <div className="text-sm font-medium text-gray-900">{account.name}</div>
+                  </td>
+                  <td className="px-6 py-4 whitespace-nowrap">
+                    <div className="text-sm text-gray-900">{account.family || '-'}</div>
                   </td>
                   <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
                     {account.lastSync ? (
@@ -382,6 +395,18 @@ export default function Accounts() {
                           onChange={(e) => setFormData({ ...formData, name: e.target.value })}
                           className="mt-1 block w-full border border-gray-300 rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-primary-500 focus:border-primary-500"
                           required
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-sm font-medium text-gray-700">
+                          Family
+                        </label>
+                        <input
+                          type="text"
+                          value={formData.family}
+                          onChange={(e) => setFormData({ ...formData, family: e.target.value })}
+                          className="mt-1 block w-full border border-gray-300 rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-primary-500 focus:border-primary-500"
+                          placeholder="e.g., Saran Family, Rajat Family"
                         />
                       </div>
                       <div>

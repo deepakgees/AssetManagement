@@ -1,5 +1,5 @@
 
-import { useState, useMemo } from 'react';
+import React, { useState, useMemo } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   PlusIcon,
@@ -14,6 +14,8 @@ import {
   UserGroupIcon,
   ChevronUpIcon,
   ChevronDownIcon,
+  UsersIcon,
+  UserIcon,
 } from '@heroicons/react/24/outline';
 import Layout from '../components/Layout';
 import { getPositions, getPositionsSummary, type Position } from '../services/positionsService';
@@ -22,11 +24,15 @@ import { getMarginsSummary, type Margin } from '../services/marginsService';
 
 export default function Positions() {
   const [selectedAccountId, setSelectedAccountId] = useState<number | null>(null);
+  const [selectedFamilyName, setSelectedFamilyName] = useState<string | null>(null);
   const [viewMode, setViewMode] = useState<'accounts' | 'positions'>('accounts');
+  const [familyView, setFamilyView] = useState<boolean>(true); // Default to family view
   const [sortConfig, setSortConfig] = useState<{
     key: keyof Position | null;
     direction: 'asc' | 'desc';
   }>({ key: null, direction: 'asc' });
+  const [expandedPositions, setExpandedPositions] = useState<Set<number>>(new Set());
+  const [expandedMonths, setExpandedMonths] = useState<Set<string>>(new Set());
 
   const queryClient = useQueryClient();
 
@@ -38,18 +44,18 @@ export default function Positions() {
 
   // Get positions based on selected account
   const { data: positions, isLoading, error } = useQuery({
-    queryKey: ['positions', selectedAccountId],
-    queryFn: () => getPositions(selectedAccountId || undefined),
-    enabled: selectedAccountId !== null && viewMode === 'positions',
+    queryKey: ['positions', selectedAccountId, selectedFamilyName, familyView],
+    queryFn: () => getPositions(selectedAccountId || undefined, familyView, selectedFamilyName || undefined),
+    enabled: viewMode === 'positions',
     refetchInterval: selectedAccountId !== null ? 10000 : false, // More frequent updates for live data
     retry: 1, // Retry once for live data failures
   });
 
   // Get positions summary
   const { data: summary, error: summaryError } = useQuery({
-    queryKey: ['positions-summary', selectedAccountId],
-    queryFn: () => getPositionsSummary(selectedAccountId || undefined),
-    enabled: selectedAccountId !== null && viewMode === 'positions',
+    queryKey: ['positions-summary', selectedAccountId, selectedFamilyName, familyView],
+    queryFn: () => getPositionsSummary(selectedAccountId || undefined, familyView, selectedFamilyName || undefined),
+    enabled: viewMode === 'positions',
     refetchInterval: selectedAccountId !== null ? 10000 : false,
     retry: 1,
   });
@@ -114,23 +120,190 @@ export default function Positions() {
     return side === 'BUY' ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800';
   };
 
-  // Helper function to get available margin for an account
+  // Function to get row background color based on price difference
+  const getRowBackgroundColor = (position: Position) => {
+    if (position.averagePrice <= 0) return '';
+    
+    const priceDifference = ((position.lastPrice - position.averagePrice) / position.averagePrice) * 100;
+    
+    if (priceDifference >= 100) {
+      return 'bg-red-50'; // Red background for 100% or more increase
+    } else if (priceDifference >= 50) {
+      return 'bg-orange-50'; // Orange background for 50% or more increase
+    }
+    
+    return '';
+  };
+
+  // Custom function to calculate available margin for an account
   const getAvailableMargin = (accountId: number): number => {
+    // Your custom calculation logic here
+    // Example: You can access positions, accounts, marginsSummary, etc.
+    
     if (!marginsSummary) return 0;
     const margin = marginsSummary.find(m => m.accountId === accountId);
     if (!margin) return 0;
+    
+    // Custom calculation example:
+    // const baseMargin = margin.liquidCollateral + margin.stockCollateral;
+    // const positionsForAccount = positions?.filter(p => p.accountId === accountId) || [];
+    // const totalPositionValue = positionsForAccount.reduce((sum, p) => sum + p.marketValue, 0);
+    // return baseMargin - totalPositionValue; // Available margin after deducting position values
+    
+    // For now, returning the original calculation
     return margin.liquidCollateral + margin.stockCollateral;
   };
 
+    // Custom function to calculate available margin for an account
+    const calculateCustomMargin = (accountId: number): number => {
+      // Your custom calculation logic here
+      // Example: You can access positions, accounts, marginsSummary, etc.
+      
+      if (!marginsSummary) return 0;
+      const margin = marginsSummary.find(m => m.accountId === accountId);
+      if (!margin) return 0;
+      
+      //calculate margin based on 50% liquid collateral first
+      const availableLiquidCollateral = margin.liquidCollateral - (margin.debits/2);
+      if(availableLiquidCollateral*2 > margin.net){
+        //available margin as per zerodha is having more than 50% of liquid collateral, so we can use that entire margin
+        return margin.net;
+      }else{
+        return availableLiquidCollateral*2;
+      }
+      //then calculate the total position value
+    };
+
   const handleAccountClick = (accountId: number) => {
     setSelectedAccountId(accountId);
+    setSelectedFamilyName(null);
+    setViewMode('positions');
+  };
+
+  const handleFamilyClick = (familyName: string) => {
+    // For family view, we'll set selectedAccountId to null and set the family name
+    // to filter positions by that specific family
+    setSelectedAccountId(null);
+    setSelectedFamilyName(familyName);
     setViewMode('positions');
   };
 
   const handleBackToAccounts = () => {
     setSelectedAccountId(null);
+    setSelectedFamilyName(null);
     setViewMode('accounts');
+    setExpandedPositions(new Set()); // Clear expanded positions when going back
+    setExpandedMonths(new Set()); // Clear expanded months when going back
   };
+
+  const togglePositionExpansion = (positionId: number) => {
+    setExpandedPositions(prev => {
+      const newSet = new Set(prev);
+      if (newSet.has(positionId)) {
+        newSet.delete(positionId);
+      } else {
+        newSet.add(positionId);
+      }
+      return newSet;
+    });
+  };
+
+  const toggleMonthExpansion = (month: string) => {
+    setExpandedMonths(prev => {
+      const newSet = new Set(prev);
+      if (newSet.has(month)) {
+        newSet.delete(month);
+      } else {
+        newSet.add(month);
+      }
+      return newSet;
+    });
+  };
+
+  // Function to extract month from position name
+  const extractMonthFromPosition = (positionName: string): string => {
+    const monthPatterns = {
+      'JAN': 'January',
+      'FEB': 'February', 
+      'MAR': 'March',
+      'APR': 'April',
+      'MAY': 'May',
+      'JUN': 'June',
+      'JUL': 'July',
+      'AUG': 'August',
+      'SEP': 'September',
+      'OCT': 'October',
+      'NOV': 'November',
+      'DEC': 'December'
+    };
+
+    for (const [prefix, monthName] of Object.entries(monthPatterns)) {
+      if (positionName.includes(prefix)) {
+        return monthName;
+      }
+    }
+    return 'Other'; // Default for positions without month prefix
+  };
+
+  // Group positions by month for individual view
+  const groupedPositions = useMemo(() => {
+    if (!positions || familyView) return null;
+    
+    const groups: Record<string, Position[]> = {};
+    
+    positions.forEach(position => {
+      const month = extractMonthFromPosition(position.tradingSymbol);
+      if (!groups[month]) {
+        groups[month] = [];
+      }
+      groups[month].push(position);
+    });
+    
+    // Sort months in chronological order
+    const monthOrder = [
+      'January', 'February', 'March', 'April', 'May', 'June',
+      'July', 'August', 'September', 'October', 'November', 'December', 'Other'
+    ];
+    
+    const sortedGroups: Record<string, Position[]> = {};
+    monthOrder.forEach(month => {
+      if (groups[month]) {
+        sortedGroups[month] = groups[month];
+      }
+    });
+    
+    return sortedGroups;
+  }, [positions, familyView]);
+
+  // Group family positions by month
+  const groupedFamilyPositions = useMemo(() => {
+    if (!positions || !familyView) return null;
+    
+    const groups: Record<string, Position[]> = {};
+    
+    positions.forEach(position => {
+      const month = extractMonthFromPosition(position.tradingSymbol);
+      if (!groups[month]) {
+        groups[month] = [];
+      }
+      groups[month].push(position);
+    });
+    
+    // Sort months in chronological order
+    const monthOrder = [
+      'January', 'February', 'March', 'April', 'May', 'June',
+      'July', 'August', 'September', 'October', 'November', 'December', 'Other'
+    ];
+    
+    const sortedGroups: Record<string, Position[]> = {};
+    monthOrder.forEach(month => {
+      if (groups[month]) {
+        sortedGroups[month] = groups[month];
+      }
+    });
+    
+    return sortedGroups;
+  }, [positions, familyView]);
 
   const handleSort = (key: keyof Position) => {
     setSortConfig(prevConfig => ({
@@ -171,6 +344,8 @@ export default function Positions() {
 
   const isLiveData = selectedAccountId !== null && summary?.source === 'zerodha';
   const hasConnectionError = error && selectedAccountId !== null;
+  
+
   const selectedAccount = accounts?.find(account => account.id === selectedAccountId);
 
   return (
@@ -179,15 +354,53 @@ export default function Positions() {
         // Accounts Table View
         <>
           <div className="mb-6">
-            <h1 className="text-2xl font-bold text-gray-900">Trading Positions</h1>
-            <p className="text-gray-600 mt-1">Select an account to view its trading positions</p>
+            <div className="flex items-center justify-between">
+              <div>
+                <h1 className="text-2xl font-bold text-gray-900">Trading Positions</h1>
+                <p className="text-gray-600 mt-1">Select an account to view its trading positions</p>
+              </div>
+              
+              {/* Family/Individual Toggle for Accounts View */}
+              <div className="flex items-center space-x-3">
+                <span className="text-sm font-medium text-gray-700">View Mode:</span>
+                <div className="flex bg-gray-100 rounded-lg p-1">
+                  <button
+                    onClick={() => setFamilyView(true)}
+                    className={`flex items-center px-3 py-1.5 text-sm font-medium rounded-md transition-colors ${
+                      familyView
+                        ? 'bg-white text-primary-600 shadow-sm'
+                        : 'text-gray-500 hover:text-gray-700'
+                    }`}
+                  >
+                    <UsersIcon className="h-4 w-4 mr-1.5" />
+                    Family Level
+                  </button>
+                  <button
+                    onClick={() => setFamilyView(false)}
+                    className={`flex items-center px-3 py-1.5 text-sm font-medium rounded-md transition-colors ${
+                      !familyView
+                        ? 'bg-white text-primary-600 shadow-sm'
+                        : 'text-gray-500 hover:text-gray-700'
+                    }`}
+                  >
+                    <UserIcon className="h-4 w-4 mr-1.5" />
+                    Individual
+                  </button>
+                </div>
+              </div>
+            </div>
           </div>
 
           {/* Accounts Table */}
           <div className="bg-white shadow rounded-lg">
             <div className="px-6 py-4 border-b border-gray-200">
               <h2 className="text-lg font-medium text-gray-900">
-                Trading Accounts ({accounts?.length || 0})
+                {familyView ? 'Trading Families' : 'Trading Accounts'} ({familyView ? 
+                  (() => {
+                    const families = new Set(accounts?.map(acc => acc.family || 'Unknown') || []);
+                    return families.size;
+                  })() 
+                  : accounts?.length || 0})
               </h2>
             </div>
 
@@ -197,8 +410,13 @@ export default function Positions() {
                                      <thead className="bg-gray-50">
                      <tr>
                        <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                         Account Name
+                         {familyView ? 'Family' : 'Account Name'}
                        </th>
+                       {!familyView && (
+                         <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                           Family
+                         </th>
+                       )}
                        <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
                          Max Profit
                        </th>
@@ -214,48 +432,130 @@ export default function Positions() {
                      </tr>
                    </thead>
                   <tbody className="bg-white divide-y divide-gray-200">
-                                         {accounts.map((account) => {
-                       const accountSummary = allAccountsSummary?.[account.id];
-                       const maxProfit = accountSummary?.summary?.totalMarketValue || 0;
-                       const availableMargin = getAvailableMargin(account.id);
-                       
-                       return (
-                         <tr key={account.id} className="hover:bg-gray-50">
-                           <td className="px-6 py-4 whitespace-nowrap">
-                             <div className="text-sm font-medium text-gray-900">{account.name}</div>
-                           </td>
-                           <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
-                             {formatCurrency(-maxProfit)}
-                           </td>
-                           <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
-                             {formatCurrency(availableMargin)}
-                           </td>
-                           <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
-                             {account.lastSync ? (
-                               <div>
-                                 <div>{new Date(account.lastSync).toLocaleDateString()}</div>
-                                 <div className="text-xs text-green-600">✓ Synced</div>
-                               </div>
-                             ) : (
-                               <div>
-                                 <div>Never</div>
-                                 <div className="text-xs text-gray-500">Not synced</div>
-                               </div>
-                             )}
-                           </td>
-                           <td className="px-6 py-4 whitespace-nowrap text-center text-sm font-medium">
-                             <button
-                               onClick={() => handleAccountClick(account.id)}
-                               className="inline-flex items-center px-3 py-1 border border-transparent text-sm font-medium rounded-md text-white bg-primary-600 hover:bg-primary-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-primary-500"
-                               title="View Positions"
-                             >
-                               <EyeIcon className="h-4 w-4 mr-1" />
-                               View Positions
-                             </button>
-                           </td>
-                         </tr>
-                       );
-                     })}
+                    {familyView ? (
+                      // Family-level view
+                      (() => {
+                        const familyGroups = new Map<string, {
+                          family: string;
+                          accounts: Account[];
+                          totalMaxProfit: number;
+                          totalAvailableMargin: number;
+                          lastSync: string | null;
+                        }>();
+
+                                                 accounts.forEach((account) => {
+                           const family = account.family || 'Unknown';
+                           const accountSummary = allAccountsSummary?.[account.id];
+                           const maxProfit = accountSummary?.summary?.totalMarketValue || 0;
+                           const availableMargin = calculateCustomMargin(account.id); // Use custom function
+
+                          if (!familyGroups.has(family)) {
+                            familyGroups.set(family, {
+                              family,
+                              accounts: [],
+                              totalMaxProfit: 0,
+                              totalAvailableMargin: 0,
+                              lastSync: null,
+                            });
+                          }
+
+                          const group = familyGroups.get(family)!;
+                          group.accounts.push(account);
+                          group.totalMaxProfit += maxProfit;
+                          group.totalAvailableMargin += availableMargin;
+                          
+                          // Use the most recent sync date
+                          if (account.lastSync && (!group.lastSync || new Date(account.lastSync) > new Date(group.lastSync))) {
+                            group.lastSync = account.lastSync;
+                          }
+                        });
+
+                        return Array.from(familyGroups.values()).map((group) => (
+                          <tr key={group.family} className="hover:bg-gray-50">
+                            <td className="px-6 py-4 whitespace-nowrap">
+                              <div className="text-sm font-medium text-gray-900">{group.family}</div>
+                              <div className="text-xs text-gray-500">{group.accounts.length} account{group.accounts.length !== 1 ? 's' : ''}</div>
+                            </td>
+                            <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
+                              {formatCurrency(-group.totalMaxProfit)}
+                            </td>
+                            <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
+                              {formatCurrency(group.totalAvailableMargin)}
+                            </td>
+                            <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                              {group.lastSync ? (
+                                <div>
+                                  <div>{new Date(group.lastSync).toLocaleDateString()}</div>
+                                  <div className="text-xs text-green-600">✓ Synced</div>
+                                </div>
+                              ) : (
+                                <div>
+                                  <div>Never</div>
+                                  <div className="text-xs text-gray-500">Not synced</div>
+                                </div>
+                              )}
+                            </td>
+                            <td className="px-6 py-4 whitespace-nowrap text-center text-sm font-medium">
+                                                             <button
+                                 onClick={() => handleFamilyClick(group.family)}
+                                className="inline-flex items-center px-3 py-1 border border-transparent text-sm font-medium rounded-md text-white bg-primary-600 hover:bg-primary-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-primary-500"
+                                title="View Positions"
+                              >
+                                <EyeIcon className="h-4 w-4 mr-1" />
+                                View Positions
+                              </button>
+                            </td>
+                          </tr>
+                        ));
+                      })()
+                    ) : (
+                      // Individual account view
+                                             accounts.map((account) => {
+                         const accountSummary = allAccountsSummary?.[account.id];
+                         const maxProfit = accountSummary?.summary?.totalMarketValue || 0;
+                         const availableMargin = calculateCustomMargin(account.id); // Use custom function
+                        
+                        return (
+                          <tr key={account.id} className="hover:bg-gray-50">
+                            <td className="px-6 py-4 whitespace-nowrap">
+                              <div className="text-sm font-medium text-gray-900">{account.name}</div>
+                            </td>
+                            <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
+                              {account.family || 'Unknown'}
+                            </td>
+                            <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
+                              {formatCurrency(-maxProfit)}
+                            </td>
+                            <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
+                              {formatCurrency(availableMargin)}
+                            </td>
+                            <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                              {account.lastSync ? (
+                                <div>
+                                  <div>{new Date(account.lastSync).toLocaleDateString()}</div>
+                                  <div className="text-xs text-green-600">✓ Synced</div>
+                                </div>
+                              ) : (
+                                <div>
+                                  <div>Never</div>
+                                  <div className="text-xs text-gray-500">Not synced</div>
+                                </div>
+                              )}
+                            </td>
+                            <td className="px-6 py-4 whitespace-nowrap text-center text-sm font-medium">
+                              <button
+                                onClick={() => handleAccountClick(account.id)}
+                                className="inline-flex items-center px-3 py-1 border border-transparent text-sm font-medium rounded-md text-white bg-primary-600 hover:bg-primary-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-primary-500"
+                                title="View Positions"
+                              >
+                                <EyeIcon className="h-4 w-4 mr-1" />
+                                View Positions
+                              </button>
+                            </td>
+                          </tr>
+                        );
+                      })
+                    )}
                   </tbody>
                 </table>
               </div>
@@ -285,11 +585,41 @@ export default function Positions() {
             <div className="flex items-center justify-between">
               <div>
                 <h1 className="text-2xl font-bold text-gray-900">
-                  Positions - {selectedAccount?.name}
+                  Positions - {selectedAccount ? selectedAccount.name : (selectedFamilyName ? `${selectedFamilyName} Family` : (familyView ? 'All Families' : 'All Accounts'))}
                 </h1>
                 <p className="text-gray-600 mt-1">
                   Monitor active trading positions and their performance
+                  {familyView && !selectedAccount && ' (Family-level aggregation)'}
                 </p>
+              </div>
+              
+              {/* Family/Individual Toggle */}
+              <div className="flex items-center space-x-3">
+                <span className="text-sm font-medium text-gray-700">View Mode:</span>
+                <div className="flex bg-gray-100 rounded-lg p-1">
+                  <button
+                    onClick={() => setFamilyView(true)}
+                    className={`flex items-center px-3 py-1.5 text-sm font-medium rounded-md transition-colors ${
+                      familyView
+                        ? 'bg-white text-primary-600 shadow-sm'
+                        : 'text-gray-500 hover:text-gray-700'
+                    }`}
+                  >
+                    <UsersIcon className="h-4 w-4 mr-1.5" />
+                    Family Level
+                  </button>
+                  <button
+                    onClick={() => setFamilyView(false)}
+                    className={`flex items-center px-3 py-1.5 text-sm font-medium rounded-md transition-colors ${
+                      !familyView
+                        ? 'bg-white text-primary-600 shadow-sm'
+                        : 'text-gray-500 hover:text-gray-700'
+                    }`}
+                  >
+                    <UserIcon className="h-4 w-4 mr-1.5" />
+                    Individual
+                  </button>
+                </div>
               </div>
             </div>
           </div>
@@ -360,7 +690,7 @@ export default function Positions() {
           <div className="bg-white shadow rounded-lg">
             <div className="px-6 py-4 border-b border-gray-200 flex justify-between items-center">
               <h2 className="text-lg font-medium text-gray-900">
-                Open Positions ({positions?.length || 0})
+                {familyView ? 'Family-Level' : 'Open'} Positions ({positions?.length || 0})
               </h2>
               {isLiveData && (
                 <span className="inline-flex items-center px-2 py-1 text-xs font-medium bg-green-100 text-green-800 rounded-full">
@@ -389,6 +719,17 @@ export default function Positions() {
                             {getSortIcon('tradingSymbol')}
                           </div>
                         </th>
+                        {familyView && (
+                          <th 
+                            className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100"
+                            onClick={() => handleSort('family')}
+                          >
+                            <div className="flex items-center">
+                              Family
+                              {getSortIcon('family')}
+                            </div>
+                          </th>
+                        )}
                         <th 
                           className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100"
                           onClick={() => handleSort('side')}
@@ -430,7 +771,7 @@ export default function Positions() {
                            onClick={() => handleSort('marketValue')}
                          >
                            <div className="flex items-center">
-                             Possible Max Profit
+                             Market Value (Possible Max Profit)
                              {getSortIcon('marketValue')}
                            </div>
                          </th>
@@ -439,43 +780,213 @@ export default function Positions() {
                           onClick={() => handleSort('pnl')}
                         >
                           <div className="flex items-center">
-                            P&L
+                            Current P&L
                             {getSortIcon('pnl')}
                           </div>
                         </th>
                       </tr>
                     </thead>
-                                     <tbody className="bg-white divide-y divide-gray-200">
-                                          {sortedPositions?.map((position) => (
-                       <tr key={position.id} className="hover:bg-gray-50">
-                         <td className="px-6 py-4 whitespace-nowrap">
-                           <div className="text-sm font-medium text-gray-900">{position.tradingSymbol}</div>
-                         </td>
-                         <td className="px-6 py-4 whitespace-nowrap">
-                           <span className={`inline-flex px-2 py-1 text-xs font-semibold rounded-full ${getSideColor(position.side)}`}>
-                             {position.side}
-                           </span>
-                         </td>
-                         <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
-                           {formatNumber(position.quantity)}
-                         </td>
-                         <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
-                           {formatCurrencyWithDecimals(position.averagePrice)}
-                         </td>
-                         <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
-                           {formatCurrency(position.lastPrice)}
-                         </td>
-                         <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
-                           {formatCurrency(position.marketValue)}
-                         </td>
-                         <td className="px-6 py-4 whitespace-nowrap text-sm">
-                           <span className={getPnLColor(position.pnl)}>
-                             {formatCurrency(position.pnl)}
-                           </span>
-                         </td>
-                       </tr>
-                     ))}
-                  </tbody>
+                                                                              <tbody className="bg-white divide-y divide-gray-200">
+                       {familyView ? (
+                         // Family view - show grouped by month
+                         groupedFamilyPositions && Object.entries(groupedFamilyPositions).map(([month, monthPositions]) => (
+                           <React.Fragment key={month}>
+                             {/* Month Header Row */}
+                             <tr className="bg-gray-100 border-b-2 border-gray-300">
+                               <td colSpan={8} className="px-6 py-3">
+                                 <div className="flex items-center justify-between">
+                                   <div className="flex items-center">
+                                     <h3 className="text-lg font-semibold text-gray-800">{month}</h3>
+                                     <span className="ml-3 px-2 py-1 text-xs font-medium bg-gray-200 text-gray-700 rounded-full">
+                                       {monthPositions.length} position{monthPositions.length !== 1 ? 's' : ''}
+                                     </span>
+                                     <span className="ml-3 px-2 py-1 text-xs font-medium bg-blue-100 text-blue-700 rounded-full">
+                                       Market Value: {formatCurrency(monthPositions.reduce((sum, pos) => sum + pos.marketValue, 0))}
+                                     </span>
+                                   </div>
+                                   <button
+                                     onClick={() => toggleMonthExpansion(month)}
+                                     className="p-2 text-gray-500 hover:text-gray-700 transition-colors"
+                                     title={expandedMonths.has(month) ? "Collapse" : "Expand"}
+                                   >
+                                     {expandedMonths.has(month) ? (
+                                       <ChevronUpIcon className="h-5 w-5" />
+                                     ) : (
+                                       <ChevronDownIcon className="h-5 w-5" />
+                                     )}
+                                   </button>
+                                 </div>
+                               </td>
+                             </tr>
+                             
+                             {/* Month Positions */}
+                             {expandedMonths.has(month) && monthPositions.map((position) => (
+                               <React.Fragment key={position.id}>
+                                 <tr className={`hover:bg-gray-50 ${getRowBackgroundColor(position)}`}>
+                                   <td className="px-6 py-4 whitespace-nowrap">
+                                     <div className="text-sm font-medium text-gray-900">{position.tradingSymbol}</div>
+                                   </td>
+                                   <td className="px-6 py-4 whitespace-nowrap">
+                                     <div className="text-sm text-gray-900">
+                                       {position.family || 'Unknown'}
+                                       {position.accounts && position.accounts.length > 1 && (
+                                         <div className="flex items-center justify-between">
+                                           <div className="text-xs text-gray-500 mt-1">
+                                             {position.accounts.length} accounts
+                                           </div>
+                                           <button
+                                             onClick={() => togglePositionExpansion(position.id)}
+                                             className="ml-2 p-1 text-gray-400 hover:text-gray-600 transition-colors"
+                                             title={expandedPositions.has(position.id) ? "Collapse" : "Expand"}
+                                           >
+                                             {expandedPositions.has(position.id) ? (
+                                               <ChevronUpIcon className="h-4 w-4" />
+                                             ) : (
+                                               <ChevronDownIcon className="h-4 w-4" />
+                                             )}
+                                           </button>
+                                         </div>
+                                       )}
+                                     </div>
+                                   </td>
+                                   <td className="px-6 py-4 whitespace-nowrap">
+                                     <span className={`inline-flex px-2 py-1 text-xs font-semibold rounded-full ${getSideColor(position.side)}`}>
+                                       {position.side}
+                                     </span>
+                                   </td>
+                                   <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
+                                     {formatNumber(position.quantity)}
+                                   </td>
+                                   <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
+                                     {formatCurrencyWithDecimals(position.averagePrice)}
+                                   </td>
+                                   <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
+                                     {formatCurrencyWithDecimals(position.lastPrice)}
+                                   </td>
+                                   <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
+                                     {formatCurrency(position.marketValue)}
+                                   </td>
+                                   <td className="px-6 py-4 whitespace-nowrap text-sm">
+                                     <span className={getPnLColor(position.pnl)}>
+                                       {formatCurrency(position.pnl)}
+                                     </span>
+                                   </td>
+                                 </tr>
+                                 
+                                 {/* Expanded Account Breakdown */}
+                                 {position.accounts && position.accounts.length > 1 && expandedPositions.has(position.id) && (
+                                   <>
+                                     {position.accounts.map((account, index) => (
+                                       <tr key={`${position.id}-${account.id}`} className="bg-gray-50 border-l-4 border-primary-200">
+                                         <td className="px-6 py-3 whitespace-nowrap pl-12">
+                                           <div className="text-sm text-gray-600">
+                                             <span className="font-medium">{account.name}</span>
+                                             <span className="text-xs text-gray-400 ml-2">(Account)</span>
+                                           </div>
+                                         </td>
+                                         <td className="px-6 py-3 whitespace-nowrap">
+                                           <div className="text-sm text-gray-600">
+                                             {account.family || 'Unknown'}
+                                           </div>
+                                         </td>
+                                         <td className="px-6 py-3 whitespace-nowrap">
+                                           <span className={`inline-flex px-2 py-1 text-xs font-semibold rounded-full ${getSideColor(position.side)}`}>
+                                             {position.side}
+                                           </span>
+                                         </td>
+                                         <td className="px-6 py-3 whitespace-nowrap text-sm text-gray-600">
+                                           {account.quantity !== undefined ? formatNumber(account.quantity) : 'N/A'}
+                                         </td>
+                                         <td className="px-6 py-3 whitespace-nowrap text-sm text-gray-600">
+                                           {account.averagePrice !== undefined ? formatCurrencyWithDecimals(account.averagePrice) : 'N/A'}
+                                         </td>
+                                         <td className="px-6 py-3 whitespace-nowrap text-sm text-gray-600">
+                                           {account.lastPrice !== undefined ? formatCurrencyWithDecimals(account.lastPrice) : 'N/A'}
+                                         </td>
+                                         <td className="px-6 py-3 whitespace-nowrap text-sm text-gray-600">
+                                           {account.marketValue !== undefined ? formatCurrency(account.marketValue) : 'N/A'}
+                                         </td>
+                                         <td className="px-6 py-3 whitespace-nowrap text-sm text-gray-600">
+                                           {account.pnl !== undefined ? (
+                                             <span className={getPnLColor(account.pnl)}>
+                                               {formatCurrency(account.pnl)}
+                                             </span>
+                                           ) : 'N/A'}
+                                         </td>
+                                       </tr>
+                                     ))}
+                                   </>
+                                 )}
+                               </React.Fragment>
+                             ))}
+                           </React.Fragment>
+                         ))
+                       ) : (
+                         // Individual view - show grouped by month
+                         groupedPositions && Object.entries(groupedPositions).map(([month, monthPositions]) => (
+                           <React.Fragment key={month}>
+                             {/* Month Header Row */}
+                             <tr className="bg-gray-100 border-b-2 border-gray-300">
+                               <td colSpan={7} className="px-6 py-3">
+                                 <div className="flex items-center justify-between">
+                                   <div className="flex items-center">
+                                     <h3 className="text-lg font-semibold text-gray-800">{month}</h3>
+                                     <span className="ml-3 px-2 py-1 text-xs font-medium bg-gray-200 text-gray-700 rounded-full">
+                                       {monthPositions.length} position{monthPositions.length !== 1 ? 's' : ''}
+                                     </span>
+                                     <span className="ml-3 px-2 py-1 text-xs font-medium bg-blue-100 text-blue-700 rounded-full">
+                                       Market Value: {formatCurrency(monthPositions.reduce((sum, pos) => sum + pos.marketValue, 0))}
+                                     </span>
+                                   </div>
+                                   <button
+                                     onClick={() => toggleMonthExpansion(month)}
+                                     className="p-2 text-gray-500 hover:text-gray-700 transition-colors"
+                                     title={expandedMonths.has(month) ? "Collapse" : "Expand"}
+                                   >
+                                     {expandedMonths.has(month) ? (
+                                       <ChevronUpIcon className="h-5 w-5" />
+                                     ) : (
+                                       <ChevronDownIcon className="h-5 w-5" />
+                                     )}
+                                   </button>
+                                 </div>
+                               </td>
+                             </tr>
+                             
+                             {/* Month Positions */}
+                             {expandedMonths.has(month) && monthPositions.map((position) => (
+                               <tr key={position.id} className={`hover:bg-gray-50 ${getRowBackgroundColor(position)}`}>
+                                 <td className="px-6 py-4 whitespace-nowrap">
+                                   <div className="text-sm font-medium text-gray-900">{position.tradingSymbol}</div>
+                                 </td>
+                                 <td className="px-6 py-4 whitespace-nowrap">
+                                   <span className={`inline-flex px-2 py-1 text-xs font-semibold rounded-full ${getSideColor(position.side)}`}>
+                                     {position.side}
+                                   </span>
+                                 </td>
+                                 <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
+                                   {formatNumber(position.quantity)}
+                                 </td>
+                                 <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
+                                   {formatCurrencyWithDecimals(position.averagePrice)}
+                                 </td>
+                                 <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
+                                   {formatCurrencyWithDecimals(position.lastPrice)}
+                                 </td>
+                                 <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
+                                   {formatCurrency(position.marketValue)}
+                                 </td>
+                                 <td className="px-6 py-4 whitespace-nowrap text-sm">
+                                   <span className={getPnLColor(position.pnl)}>
+                                     {formatCurrency(position.pnl)}
+                                   </span>
+                                 </td>
+                               </tr>
+                             ))}
+                           </React.Fragment>
+                         ))
+                       )}
+                     </tbody>
                 </table>
               </div>
             ) : (

@@ -4,13 +4,14 @@ import { prisma } from '../index';
 import logger from '../utils/logger';
 import { serviceLogger } from '../utils/serviceLogger';
 import { KiteConnect } from 'kiteconnect';
-import { generateSession, syncHoldings, syncPositions, initializeKiteConnect, setAccessToken, syncMargins } from '../../services/ZerodhaService';
+import { generateSession, syncHoldings, syncPositions, initializeKiteConnect, setAccessToken, syncMargins, getTrades, syncTrades } from '../../services/ZerodhaService';
 
 const router = express.Router();
 
 // Validation middleware
 const validateAccount = [
   body('name').trim().isLength({ min: 2 }).withMessage('Name must be at least 2 characters long'),
+  body('family').optional().trim(),
   body('apiKey').optional().trim(),
   body('apiSecret').optional().trim(),
   body('requestToken').optional().trim(),
@@ -80,10 +81,11 @@ router.post('/', validateAccount, async (req: Request, res: Response) => {
       return res.status(400).json({ errors: errors.array() });
     }
 
-    const { name, apiKey, apiSecret, requestToken, description } = req.body;
+    const { name, family, apiKey, apiSecret, requestToken, description } = req.body;
     
     logger.info('Creating new account', {
       name,
+      family,
       hasApiKey: !!apiKey,
       hasApiSecret: !!apiSecret,
       hasRequestToken: !!requestToken,
@@ -93,6 +95,7 @@ router.post('/', validateAccount, async (req: Request, res: Response) => {
     const account = await prisma.account.create({
       data: {
         name,
+        family,
         apiKey,
         apiSecret,
         requestToken,
@@ -124,7 +127,7 @@ router.put('/:id', validateAccount, async (req: Request, res: Response) => {
       return res.status(400).json({ errors: errors.array() });
     }
 
-    const { name, apiKey, apiSecret, requestToken, description } = req.body;
+    const { name, family, apiKey, apiSecret, requestToken, description } = req.body;
     const accountId = parseInt(req.params.id);
 
     // Check if account exists
@@ -142,6 +145,7 @@ router.put('/:id', validateAccount, async (req: Request, res: Response) => {
       where: { id: accountId },
       data: {
         name,
+        family,
         apiKey,
         apiSecret,
         requestToken,
@@ -307,6 +311,9 @@ router.post('/:id/sync', async (req: Request, res: Response) => {
 
       //sync margings using zerodha service
       await syncMargins(existingAccount);
+
+      //get trades using zerodha service
+      await syncTrades(existingAccount);
       
       console.log('Data sync completed successfully');
       
