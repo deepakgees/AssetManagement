@@ -4,7 +4,7 @@ import { prisma } from '../index';
 import logger from '../utils/logger';
 import { serviceLogger } from '../utils/serviceLogger';
 import { KiteConnect } from 'kiteconnect';
-import { generateSession, syncHoldings, syncPositions, initializeKiteConnect, setAccessToken, syncMargins, getTrades, syncTrades } from '../../services/ZerodhaService';
+import { generateSession, syncHoldings, syncPositions, initializeKiteConnect, setAccessToken, syncMargins } from '../../services/ZerodhaService';
 
 const router = express.Router();
 
@@ -311,9 +311,6 @@ router.post('/:id/sync', async (req: Request, res: Response) => {
 
       //sync margings using zerodha service
       await syncMargins(existingAccount);
-
-      //get trades using zerodha service
-      await syncTrades(existingAccount);
       
       console.log('Data sync completed successfully');
       

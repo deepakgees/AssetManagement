@@ -66,7 +66,7 @@ export default function Dashboard() {
   };
 
   return (
-    <Layout title="Dashboard" showRefresh>
+    <Layout>
       {isLoading && (
         <div className="fixed inset-0 bg-gray-900 bg-opacity-50 flex items-center justify-center z-50">
           <div className="bg-white p-4 rounded-lg">

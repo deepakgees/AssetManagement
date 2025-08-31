@@ -1,14 +1,11 @@
+import React from 'react';
 import { BrowserRouter as Router, Routes, Route } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-
-// Import pages
-import Dashboard from './pages/Dashboard';
+import Accounts from './pages/Accounts';
 import Holdings from './pages/Holdings';
 import Positions from './pages/Positions';
 import PnL from './pages/PnL';
-import Analytics from './pages/Analytics';
-import Accounts from './pages/Accounts';
-
+import Dividends from './pages/Dividends';
 
 // Create React Query client
 const queryClient = new QueryClient({
@@ -26,13 +23,12 @@ function App() {
       <Router>
         <div className="min-h-screen bg-gray-50">
           <Routes>
-            <Route path="/" element={<Dashboard />} />
+            <Route path="/" element={<Accounts />} />
+            <Route path="/accounts" element={<Accounts />} />
             <Route path="/holdings" element={<Holdings />} />
             <Route path="/positions" element={<Positions />} />
             <Route path="/pnl" element={<PnL />} />
-            <Route path="/analytics" element={<Analytics />} />
-            <Route path="/accounts" element={<Accounts />} />
-
+            <Route path="/dividends" element={<Dividends />} />
           </Routes>
         </div>
       </Router>

@@ -152,7 +152,7 @@ export default function Holdings() {
   const selectedAccount = accounts?.find(account => account.id === selectedAccountId);
 
   return (
-    <Layout title="Holdings">
+    <Layout>
       {viewMode === 'accounts' ? (
         // Accounts Table View
         <>
@@ -294,34 +294,34 @@ export default function Holdings() {
             </div>
           )}
 
-                     {/* Summary Cards */}
-           {summary && (
-             <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6">
-               <div className="bg-white rounded-lg shadow p-4">
-                 <div className="flex items-center">
-                   <CurrencyDollarIcon className="h-8 w-8 text-green-500" />
-                   <div className="ml-3">
-                     <p className="text-sm font-medium text-gray-500">Portfolio Value</p>
-                     <p className="text-2xl font-bold text-gray-900">
-                       {formatCurrency(summary.summary?.totalMarketValue || 0)}
-                     </p>
-                   </div>
-                 </div>
-               </div>
+          {/* Summary Cards */}
+          {summary && (
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6">
+              <div className="bg-white rounded-lg shadow p-4">
+                <div className="flex items-center">
+                  <CurrencyDollarIcon className="h-8 w-8 text-green-500" />
+                  <div className="ml-3">
+                    <p className="text-sm font-medium text-gray-500">Portfolio Value</p>
+                    <p className="text-2xl font-bold text-gray-900">
+                      {formatCurrency(summary.summary?.totalMarketValue || 0)}
+                    </p>
+                  </div>
+                </div>
+              </div>
 
-               <div className="bg-white rounded-lg shadow p-4">
-                 <div className="flex items-center">
-                   <CurrencyDollarIcon className="h-8 w-8 text-blue-500" />
-                   <div className="ml-3">
-                     <p className="text-sm font-medium text-gray-500">Total P&L</p>
-                     <p className={`text-2xl font-bold ${getPnLColor(summary.summary?.totalPnL || 0)}`}>
-                       {formatCurrency(summary.summary?.totalPnL || 0)}
-                     </p>
-                   </div>
-                 </div>
-               </div>
-             </div>
-           )}
+              <div className="bg-white rounded-lg shadow p-4">
+                <div className="flex items-center">
+                  <CurrencyDollarIcon className="h-8 w-8 text-blue-500" />
+                  <div className="ml-3">
+                    <p className="text-sm font-medium text-gray-500">Total P&L</p>
+                    <p className={`text-2xl font-bold ${getPnLColor(summary.summary?.totalPnL || 0)}`}>
+                      {formatCurrency(summary.summary?.totalPnL || 0)}
+                    </p>
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
 
           {/* Holdings Table */}
           <div className="bg-white shadow rounded-lg">
@@ -350,83 +350,92 @@ export default function Holdings() {
                           {getSortIcon('tradingSymbol')}
                         </div>
                       </th>
-                                             <th 
-                         className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100"
-                         onClick={() => handleSort('quantity')}
-                       >
-                         <div className="flex items-center">
-                           Quantity
-                           {getSortIcon('quantity')}
-                         </div>
-                       </th>
-                       <th 
-                         className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100"
-                         onClick={() => handleSort('averagePrice')}
-                       >
-                         <div className="flex items-center">
-                           Avg Price
-                           {getSortIcon('averagePrice')}
-                         </div>
-                       </th>
-                       <th 
-                         className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100"
-                         onClick={() => handleSort('lastPrice')}
-                       >
-                         <div className="flex items-center">
-                           Last Price
-                           {getSortIcon('lastPrice')}
-                         </div>
-                       </th>
-                       <th 
-                         className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100"
-                         onClick={() => handleSort('marketValue')}
-                       >
-                         <div className="flex items-center">
-                           Market Value
-                           {getSortIcon('marketValue')}
-                         </div>
-                       </th>
-                       <th 
-                         className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100"
-                         onClick={() => handleSort('pnl')}
-                       >
-                         <div className="flex items-center">
-                           P&L
-                           {getSortIcon('pnl')}
-                         </div>
-                       </th>
+                      <th 
+                        className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100"
+                        onClick={() => handleSort('quantity')}
+                      >
+                        <div className="flex items-center">
+                          Quantity
+                          {getSortIcon('quantity')}
+                        </div>
+                      </th>
+                      <th 
+                        className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100"
+                        onClick={() => handleSort('averagePrice')}
+                      >
+                        <div className="flex items-center">
+                          Avg Price
+                          {getSortIcon('averagePrice')}
+                        </div>
+                      </th>
+                      <th 
+                        className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100"
+                        onClick={() => handleSort('lastPrice')}
+                      >
+                        <div className="flex items-center">
+                          LTP
+                          {getSortIcon('lastPrice')}
+                        </div>
+                      </th>
+                      <th 
+                        className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100"
+                        onClick={() => handleSort('marketValue')}
+                      >
+                        <div className="flex items-center">
+                          Market Value
+                          {getSortIcon('marketValue')}
+                        </div>
+                      </th>
+                      <th 
+                        className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100"
+                        onClick={() => handleSort('pnl')}
+                      >
+                        <div className="flex items-center">
+                          P&L
+                          {getSortIcon('pnl')}
+                        </div>
+                      </th>
+                      <th 
+                        className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100"
+                        onClick={() => handleSort('pnlPercentage')}
+                      >
+                        <div className="flex items-center">
+                          P&L %
+                          {getSortIcon('pnlPercentage')}
+                        </div>
+                      </th>
                     </tr>
                   </thead>
                   <tbody className="bg-white divide-y divide-gray-200">
-                    {sortedHoldings?.map((holding) => (
-                                             <tr key={holding.id} className="hover:bg-gray-50">
-                         <td className="px-6 py-4 whitespace-nowrap">
-                           <div className="text-sm font-medium text-gray-900">{holding.tradingSymbol}</div>
-                           <div className="text-xs text-gray-500">{holding.exchange}</div>
-                         </td>
-                                                   <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
-                            {formatNumber(holding.quantity)}
-                            {holding.collateralQuantity && holding.collateralQuantity > 0 && (
-                              <span className="text-gray-500 ml-1">
-                                ({formatNumber(holding.collateralQuantity)})
-                              </span>
-                            )}
-                          </td>
-                         <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
-                           {formatCurrencyWithDecimals(holding.averagePrice)}
-                         </td>
-                         <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
-                           {formatCurrency(holding.lastPrice)}
-                         </td>
-                         <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
-                           {formatCurrency(holding.marketValue)}
-                         </td>
-                         <td className="px-6 py-4 whitespace-nowrap text-sm">
-                           <span className={getPnLColor(holding.pnl)}>
-                             {formatCurrency(holding.pnl)}
-                           </span>
-                         </td>
-                       </tr>
+                    {(sortedHoldings || []).map((holding) => (
+                      <tr key={holding.id} className="hover:bg-gray-50">
+                        <td className="px-6 py-4 whitespace-nowrap">
+                          <div className="text-sm font-medium text-gray-900">{holding.tradingSymbol}</div>
+                          <div className="text-sm text-gray-500">{holding.exchange}</div>
+                        </td>
+                        <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
+                          {holding.quantity.toLocaleString()}
+                        </td>
+                        <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
+                          {formatCurrency(holding.averagePrice)}
+                        </td>
+                        <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
+                          {formatCurrency(holding.lastPrice)}
+                        </td>
+                        <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
+                          {formatCurrency(holding.marketValue)}
+                        </td>
+                        <td className="px-6 py-4 whitespace-nowrap text-sm">
+                          <span className={getPnLColor(holding.pnl)}>
+                            {formatCurrency(holding.pnl)}
+                          </span>
+                        </td>
+                        <td className="px-6 py-4 whitespace-nowrap text-sm">
+                          <span className={getPnLColor(holding.pnlPercentage)}>
+                            {formatPercentage(holding.pnlPercentage)}
+                          </span>
+                        </td>
+                      </tr>
                     ))}
                   </tbody>
                 </table>
@@ -436,13 +445,8 @@ export default function Holdings() {
                 <ChartBarIcon className="h-12 w-12 text-gray-400 mx-auto" />
                 <h3 className="mt-2 text-sm font-medium text-gray-900">No holdings found</h3>
                 <p className="mt-1 text-sm text-gray-500">
-                  No holdings for this account.
+                  This account doesn't have any holdings yet.
                 </p>
-                {hasConnectionError && (
-                  <p className="mt-2 text-xs text-yellow-600">
-                    Check if your account has holdings data available.
-                  </p>
-                )}
               </div>
             )}
           </div>

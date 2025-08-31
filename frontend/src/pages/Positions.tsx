@@ -154,25 +154,34 @@ export default function Positions() {
     return margin.liquidCollateral + margin.stockCollateral;
   };
 
-    // Custom function to calculate available margin for an account
-    const calculateCustomMargin = (accountId: number): number => {
-      // Your custom calculation logic here
-      // Example: You can access positions, accounts, marginsSummary, etc.
-      
-      if (!marginsSummary) return 0;
-      const margin = marginsSummary.find(m => m.accountId === accountId);
-      if (!margin) return 0;
-      
-      //calculate margin based on 50% liquid collateral first
-      const availableLiquidCollateral = margin.liquidCollateral - (margin.debits/2);
-      if(availableLiquidCollateral*2 > margin.net){
-        //available margin as per zerodha is having more than 50% of liquid collateral, so we can use that entire margin
-        return margin.net;
-      }else{
-        return availableLiquidCollateral*2;
-      }
-      //then calculate the total position value
-    };
+         // Custom function to calculate available margin for an account
+     const calculateCustomMargin = (accountId: number): number => {
+       // Your custom calculation logic here
+       // Example: You can access positions, accounts, marginsSummary, etc.
+       
+       if (!marginsSummary) return 0;
+       const margin = marginsSummary.find(m => m.accountId === accountId);
+       if (!margin) return 0;
+       
+       //calculate margin based on 50% liquid collateral first
+       const availableLiquidCollateral = margin.liquidCollateral - (margin.debits/2);
+       if(availableLiquidCollateral*2 > margin.net){
+         //available margin as per zerodha is having more than 50% of liquid collateral, so we can use that entire margin
+         return margin.net;
+       }else{
+         return availableLiquidCollateral*2;
+       }
+       //then calculate the total position value
+     };
+
+     // Function to get used margin (debits) for an account
+     const getUsedMargin = (accountId: number): number => {
+       if (!marginsSummary) return 0;
+       const margin = marginsSummary.find(m => m.accountId === accountId);
+       if (!margin) return 0;
+       
+       return margin.debits || 0;
+     };
 
   const handleAccountClick = (accountId: number) => {
     setSelectedAccountId(accountId);
@@ -349,7 +358,7 @@ export default function Positions() {
   const selectedAccount = accounts?.find(account => account.id === selectedAccountId);
 
   return (
-    <Layout title="Positions">
+    <Layout>
       {viewMode === 'accounts' ? (
         // Accounts Table View
         <>
@@ -417,14 +426,14 @@ export default function Positions() {
                            Family
                          </th>
                        )}
-                       <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                         Max Profit
-                       </th>
+                                               <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                          Max Profit (% of Total Margin)
+                        </th>
                        <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
                          Available Margin
                        </th>
                        <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                         Last Sync
+                         Used Margin
                        </th>
                        <th className="px-6 py-3 text-center text-xs font-medium text-gray-500 uppercase tracking-wider">
                          Actions
@@ -440,7 +449,7 @@ export default function Positions() {
                           accounts: Account[];
                           totalMaxProfit: number;
                           totalAvailableMargin: number;
-                          lastSync: string | null;
+                          totalUsedMargin: number;
                         }>();
 
                                                  accounts.forEach((account) => {
@@ -455,7 +464,7 @@ export default function Positions() {
                               accounts: [],
                               totalMaxProfit: 0,
                               totalAvailableMargin: 0,
-                              lastSync: null,
+                              totalUsedMargin: 0,
                             });
                           }
 
@@ -463,11 +472,7 @@ export default function Positions() {
                           group.accounts.push(account);
                           group.totalMaxProfit += maxProfit;
                           group.totalAvailableMargin += availableMargin;
-                          
-                          // Use the most recent sync date
-                          if (account.lastSync && (!group.lastSync || new Date(account.lastSync) > new Date(group.lastSync))) {
-                            group.lastSync = account.lastSync;
-                          }
+                          group.totalUsedMargin += getUsedMargin(account.id);
                         });
 
                         return Array.from(familyGroups.values()).map((group) => (
@@ -478,22 +483,21 @@ export default function Positions() {
                             </td>
                             <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
                               {formatCurrency(-group.totalMaxProfit)}
+                                                             {(() => {
+                                 const totalMargin = group.totalAvailableMargin + group.totalUsedMargin;
+                                 const percentage = totalMargin > 0 ? (-group.totalMaxProfit / totalMargin) * 100 : 0;
+                                 return (
+                                   <div className="text-xs text-gray-500">
+                                     ({percentage.toFixed(2)}%)
+                                   </div>
+                                 );
+                               })()}
                             </td>
                             <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
                               {formatCurrency(group.totalAvailableMargin)}
                             </td>
-                            <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
-                              {group.lastSync ? (
-                                <div>
-                                  <div>{new Date(group.lastSync).toLocaleDateString()}</div>
-                                  <div className="text-xs text-green-600">✓ Synced</div>
-                                </div>
-                              ) : (
-                                <div>
-                                  <div>Never</div>
-                                  <div className="text-xs text-gray-500">Not synced</div>
-                                </div>
-                              )}
+                            <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
+                              {formatCurrency(group.totalUsedMargin)}
                             </td>
                             <td className="px-6 py-4 whitespace-nowrap text-center text-sm font-medium">
                                                              <button
@@ -525,22 +529,21 @@ export default function Positions() {
                             </td>
                             <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
                               {formatCurrency(-maxProfit)}
+                                                             {(() => {
+                                 const totalMargin = availableMargin + getUsedMargin(account.id);
+                                 const percentage = totalMargin > 0 ? (-maxProfit / totalMargin) * 100 : 0;
+                                 return (
+                                   <div className="text-xs text-gray-500">
+                                     ({percentage.toFixed(2)}%)
+                                   </div>
+                                 );
+                               })()}
                             </td>
                             <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
                               {formatCurrency(availableMargin)}
                             </td>
-                            <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
-                              {account.lastSync ? (
-                                <div>
-                                  <div>{new Date(account.lastSync).toLocaleDateString()}</div>
-                                  <div className="text-xs text-green-600">✓ Synced</div>
-                                </div>
-                              ) : (
-                                <div>
-                                  <div>Never</div>
-                                  <div className="text-xs text-gray-500">Not synced</div>
-                                </div>
-                              )}
+                            <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
+                              {formatCurrency(getUsedMargin(account.id))}
                             </td>
                             <td className="px-6 py-4 whitespace-nowrap text-center text-sm font-medium">
                               <button
@@ -793,7 +796,7 @@ export default function Positions() {
                            <React.Fragment key={month}>
                              {/* Month Header Row */}
                              <tr className="bg-gray-100 border-b-2 border-gray-300">
-                               <td colSpan={8} className="px-6 py-3">
+                               <td colSpan={7} className="px-6 py-3">
                                  <div className="flex items-center justify-between">
                                    <div className="flex items-center">
                                      <h3 className="text-lg font-semibold text-gray-800">{month}</h3>
