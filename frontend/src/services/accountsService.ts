@@ -12,6 +12,9 @@ export interface Account {
   lastSync?: string;
   createdAt: string;
   updatedAt?: string;
+  userId?: string;
+  password?: string;
+  totpSecret?: string;
 }
 
 export interface CreateAccountData {
@@ -21,6 +24,9 @@ export interface CreateAccountData {
   apiSecret?: string;
   requestToken?: string;
   description?: string;
+  userId?: string;
+  password?: string;
+  totpSecret?: string;
 }
 
 export interface UpdateAccountData {
@@ -31,6 +37,9 @@ export interface UpdateAccountData {
   requestToken?: string;
   description?: string;
   isActive?: boolean;
+  userId?: string;
+  password?: string;
+  totpSecret?: string;
 }
 
 // Get all accounts
@@ -93,5 +102,15 @@ export const syncAccount = async (id: number, accessToken?: string): Promise<{
   };
 }> => {
   const response = await api.post(`/accounts/${id}/sync`, accessToken ? { accessToken } : {});
+  return response.data;
+};
+
+// Sync all accounts
+export const syncAllAccounts = async (): Promise<{
+  message: string;
+  syncedAccounts: number;
+  failedAccounts: number;
+}> => {
+  const response = await api.post('/accounts/sync-all');
   return response.data;
 }; 

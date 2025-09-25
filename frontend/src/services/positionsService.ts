@@ -13,6 +13,8 @@ export interface Position {
   product: string;
   side: string;
   accountId: number;
+  marginBlocked?: number;
+  symbolMargin?: number;
   account?: {
     id: number;
     name: string;

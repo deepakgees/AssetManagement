@@ -33,6 +33,7 @@ export default function Positions() {
   }>({ key: null, direction: 'asc' });
   const [expandedPositions, setExpandedPositions] = useState<Set<number>>(new Set());
   const [expandedMonths, setExpandedMonths] = useState<Set<string>>(new Set());
+  const [expandedMarginFamilies, setExpandedMarginFamilies] = useState<Set<string>>(new Set());
 
   const queryClient = useQueryClient();
 
@@ -104,6 +105,13 @@ export default function Positions() {
     }).format(amount);
   };
 
+  // Helper function to calculate percentage of margin blocked
+  const getMarginPercentage = (value: number, marginBlocked: number): string => {
+    if (marginBlocked <= 0) return '';
+    const percentage = (Math.abs(value) / marginBlocked) * 100;
+    return ` (${percentage.toFixed(1)}%)`;
+  };
+
   const formatNumber = (num: number) => {
     return new Intl.NumberFormat('en-IN').format(num);
   };
@@ -116,9 +124,6 @@ export default function Positions() {
     return pnl >= 0 ? 'text-green-600' : 'text-red-600';
   };
 
-  const getSideColor = (side: string) => {
-    return side === 'BUY' ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800';
-  };
 
   // Function to get row background color based on price difference
   const getRowBackgroundColor = (position: Position) => {
@@ -203,6 +208,7 @@ export default function Positions() {
     setViewMode('accounts');
     setExpandedPositions(new Set()); // Clear expanded positions when going back
     setExpandedMonths(new Set()); // Clear expanded months when going back
+    setExpandedMarginFamilies(new Set()); // Clear expanded margin families when going back
   };
 
   const togglePositionExpansion = (positionId: number) => {
@@ -224,6 +230,18 @@ export default function Positions() {
         newSet.delete(month);
       } else {
         newSet.add(month);
+      }
+      return newSet;
+    });
+  };
+
+  const toggleMarginExpansion = (familyName: string) => {
+    setExpandedMarginFamilies(prev => {
+      const newSet = new Set(prev);
+      if (newSet.has(familyName)) {
+        newSet.delete(familyName);
+      } else {
+        newSet.add(familyName);
       }
       return newSet;
     });
@@ -476,40 +494,106 @@ export default function Positions() {
                         });
 
                         return Array.from(familyGroups.values()).map((group) => (
-                          <tr key={group.family} className="hover:bg-gray-50">
-                            <td className="px-6 py-4 whitespace-nowrap">
-                              <div className="text-sm font-medium text-gray-900">{group.family}</div>
-                              <div className="text-xs text-gray-500">{group.accounts.length} account{group.accounts.length !== 1 ? 's' : ''}</div>
-                            </td>
-                            <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
-                              {formatCurrency(-group.totalMaxProfit)}
-                                                             {(() => {
-                                 const totalMargin = group.totalAvailableMargin + group.totalUsedMargin;
-                                 const percentage = totalMargin > 0 ? (-group.totalMaxProfit / totalMargin) * 100 : 0;
-                                 return (
-                                   <div className="text-xs text-gray-500">
-                                     ({percentage.toFixed(2)}%)
-                                   </div>
-                                 );
-                               })()}
-                            </td>
-                            <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
-                              {formatCurrency(group.totalAvailableMargin)}
-                            </td>
-                            <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
-                              {formatCurrency(group.totalUsedMargin)}
-                            </td>
-                            <td className="px-6 py-4 whitespace-nowrap text-center text-sm font-medium">
-                                                             <button
-                                 onClick={() => handleFamilyClick(group.family)}
-                                className="inline-flex items-center px-3 py-1 border border-transparent text-sm font-medium rounded-md text-white bg-primary-600 hover:bg-primary-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-primary-500"
-                                title="View Positions"
-                              >
-                                <EyeIcon className="h-4 w-4 mr-1" />
-                                View Positions
-                              </button>
-                            </td>
-                          </tr>
+                          <React.Fragment key={group.family}>
+                            <tr className="hover:bg-gray-50">
+                              <td className="px-6 py-4 whitespace-nowrap">
+                                <div className="text-sm font-medium text-gray-900">{group.family}</div>
+                                <div className="text-xs text-gray-500">{group.accounts.length} account{group.accounts.length !== 1 ? 's' : ''}</div>
+                              </td>
+                              <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
+                                {formatCurrency(-group.totalMaxProfit)}
+                                                               {(() => {
+                                   const totalMargin = group.totalAvailableMargin + group.totalUsedMargin;
+                                   const percentage = totalMargin > 0 ? (-group.totalMaxProfit / totalMargin) * 100 : 0;
+                                   return (
+                                     <div className="text-xs text-gray-500">
+                                       ({percentage.toFixed(2)}%)
+                                     </div>
+                                   );
+                                 })()}
+                              </td>
+                              <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
+                                <div className="flex items-center">
+                                  <span>{formatCurrency(group.totalAvailableMargin)}</span>
+                                  <button
+                                    onClick={() => toggleMarginExpansion(group.family)}
+                                    className="ml-2 p-1 text-gray-400 hover:text-gray-600 transition-colors"
+                                    title="View individual account margins"
+                                  >
+                                    {expandedMarginFamilies.has(group.family) ? (
+                                      <ChevronUpIcon className="h-4 w-4" />
+                                    ) : (
+                                      <ChevronDownIcon className="h-4 w-4" />
+                                    )}
+                                  </button>
+                                </div>
+                              </td>
+                              <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
+                                {formatCurrency(group.totalUsedMargin)}
+                              </td>
+                              <td className="px-6 py-4 whitespace-nowrap text-center text-sm font-medium">
+                                                               <button
+                                   onClick={() => handleFamilyClick(group.family)}
+                                  className="inline-flex items-center px-3 py-1 border border-transparent text-sm font-medium rounded-md text-white bg-primary-600 hover:bg-primary-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-primary-500"
+                                  title="View Positions"
+                                >
+                                  <EyeIcon className="h-4 w-4 mr-1" />
+                                  View Positions
+                                </button>
+                              </td>
+                            </tr>
+                            
+                            {/* Expanded Margin Details */}
+                            {expandedMarginFamilies.has(group.family) && (
+                              <>
+                                {group.accounts.map((account) => {
+                                  const accountSummary = allAccountsSummary?.[account.id];
+                                  const maxProfit = accountSummary?.summary?.totalMarketValue || 0;
+                                  const availableMargin = calculateCustomMargin(account.id);
+                                  const usedMargin = getUsedMargin(account.id);
+                                  
+                                  return (
+                                    <tr key={`${group.family}-${account.id}`} className="bg-gray-50 border-l-4 border-blue-200">
+                                      <td className="px-6 py-3 whitespace-nowrap pl-12">
+                                        <div className="text-sm text-gray-600">
+                                          <span className="font-medium">{account.name}</span>
+                                          <span className="text-xs text-gray-400 ml-2">(Account)</span>
+                                        </div>
+                                      </td>
+                                      <td className="px-6 py-3 whitespace-nowrap text-sm text-gray-600">
+                                        {formatCurrency(-maxProfit)}
+                                        {(() => {
+                                          const totalMargin = availableMargin + usedMargin;
+                                          const percentage = totalMargin > 0 ? (-maxProfit / totalMargin) * 100 : 0;
+                                          return (
+                                            <div className="text-xs text-gray-400">
+                                              ({percentage.toFixed(2)}%)
+                                            </div>
+                                          );
+                                        })()}
+                                      </td>
+                                      <td className="px-6 py-3 whitespace-nowrap text-sm text-gray-600">
+                                        {formatCurrency(availableMargin)}
+                                      </td>
+                                      <td className="px-6 py-3 whitespace-nowrap text-sm text-gray-600">
+                                        {formatCurrency(usedMargin)}
+                                      </td>
+                                      <td className="px-6 py-3 whitespace-nowrap text-center text-sm font-medium">
+                                        <button
+                                          onClick={() => handleAccountClick(account.id)}
+                                          className="inline-flex items-center px-2 py-1 border border-transparent text-xs font-medium rounded-md text-white bg-blue-600 hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500"
+                                          title="View Account Positions"
+                                        >
+                                          <EyeIcon className="h-3 w-3 mr-1" />
+                                          View
+                                        </button>
+                                      </td>
+                                    </tr>
+                                  );
+                                })}
+                              </>
+                            )}
+                          </React.Fragment>
                         ));
                       })()
                     ) : (
@@ -722,7 +806,7 @@ export default function Positions() {
                             {getSortIcon('tradingSymbol')}
                           </div>
                         </th>
-                        {familyView && (
+                        {familyView && !selectedFamilyName && (
                           <th 
                             className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100"
                             onClick={() => handleSort('family')}
@@ -735,20 +819,34 @@ export default function Positions() {
                         )}
                         <th 
                           className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100"
-                          onClick={() => handleSort('side')}
-                        >
-                          <div className="flex items-center">
-                            Side
-                            {getSortIcon('side')}
-                          </div>
-                        </th>
-                        <th 
-                          className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100"
                           onClick={() => handleSort('quantity')}
                         >
                           <div className="flex items-center">
                             Quantity
                             {getSortIcon('quantity')}
+                          </div>
+                        </th>
+                        <th 
+                          className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100"
+                          onClick={() => handleSort('marginBlocked')}
+                        >
+                          <div className="flex items-center">
+                            Margin Blocked
+                            {getSortIcon('marginBlocked')}
+                          </div>
+                        </th>
+                        <th 
+                          className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider"
+                        >
+                          Remaining P&L
+                        </th>
+                        <th 
+                          className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100"
+                          onClick={() => handleSort('marketValue')}
+                        >
+                          <div className="flex items-center">
+                            Market Value (Possible Max Profit)
+                            {getSortIcon('marketValue')}
                           </div>
                         </th>
                         <th 
@@ -769,15 +867,6 @@ export default function Positions() {
                             {getSortIcon('lastPrice')}
                           </div>
                         </th>
-                                                 <th 
-                           className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100"
-                           onClick={() => handleSort('marketValue')}
-                         >
-                           <div className="flex items-center">
-                             Market Value (Possible Max Profit)
-                             {getSortIcon('marketValue')}
-                           </div>
-                         </th>
                         <th 
                           className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100"
                           onClick={() => handleSort('pnl')}
@@ -796,7 +885,7 @@ export default function Positions() {
                            <React.Fragment key={month}>
                              {/* Month Header Row */}
                              <tr className="bg-gray-100 border-b-2 border-gray-300">
-                               <td colSpan={7} className="px-6 py-3">
+                               <td colSpan={selectedFamilyName ? 7 : 8} className="px-6 py-3">
                                  <div className="flex items-center justify-between">
                                    <div className="flex items-center">
                                      <h3 className="text-lg font-semibold text-gray-800">{month}</h3>
@@ -827,47 +916,55 @@ export default function Positions() {
                                <React.Fragment key={position.id}>
                                  <tr className={`hover:bg-gray-50 ${getRowBackgroundColor(position)}`}>
                                    <td className="px-6 py-4 whitespace-nowrap">
-                                     <div className="text-sm font-medium text-gray-900">{position.tradingSymbol}</div>
-                                   </td>
-                                   <td className="px-6 py-4 whitespace-nowrap">
-                                     <div className="text-sm text-gray-900">
-                                       {position.family || 'Unknown'}
-                                       {position.accounts && position.accounts.length > 1 && (
-                                         <div className="flex items-center justify-between">
-                                           <div className="text-xs text-gray-500 mt-1">
-                                             {position.accounts.length} accounts
-                                           </div>
-                                           <button
-                                             onClick={() => togglePositionExpansion(position.id)}
-                                             className="ml-2 p-1 text-gray-400 hover:text-gray-600 transition-colors"
-                                             title={expandedPositions.has(position.id) ? "Collapse" : "Expand"}
-                                           >
-                                             {expandedPositions.has(position.id) ? (
-                                               <ChevronUpIcon className="h-4 w-4" />
-                                             ) : (
-                                               <ChevronDownIcon className="h-4 w-4" />
-                                             )}
-                                           </button>
-                                         </div>
-                                       )}
+                                     <div className="flex items-center">
+                                       <div className={`w-3 h-3 rounded-full mr-2 ${position.side === 'BUY' ? 'bg-green-500' : 'bg-red-500'}`}></div>
+                                       <div className="text-sm font-medium text-gray-900">{position.tradingSymbol}</div>
+                                     </div>
+                                     <div className="flex items-center justify-between mt-1">
+                                       <div className="text-xs text-gray-500">
+                                         {position.accounts ? position.accounts.length : 1} account{position.accounts && position.accounts.length !== 1 ? 's' : ''}
+                                       </div>
+                                       <button
+                                         onClick={() => togglePositionExpansion(position.id)}
+                                         className="ml-2 p-1 text-gray-400 hover:text-gray-600 transition-colors"
+                                         title={expandedPositions.has(position.id) ? "Collapse" : "Expand"}
+                                       >
+                                         {expandedPositions.has(position.id) ? (
+                                           <ChevronUpIcon className="h-4 w-4" />
+                                         ) : (
+                                           <ChevronDownIcon className="h-4 w-4" />
+                                         )}
+                                       </button>
                                      </div>
                                    </td>
-                                   <td className="px-6 py-4 whitespace-nowrap">
-                                     <span className={`inline-flex px-2 py-1 text-xs font-semibold rounded-full ${getSideColor(position.side)}`}>
-                                       {position.side}
+                                   {!selectedFamilyName && (
+                                     <td className="px-6 py-4 whitespace-nowrap">
+                                       <div className="text-sm text-gray-900">
+                                         {position.family || 'Unknown'}
+                                       </div>
+                                     </td>
+                                   )}
+                                   <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
+                                     {formatNumber(position.quantity)}
+                                   </td>
+                                   <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
+                                     {formatCurrency(position.marginBlocked || 0)}
+                                   </td>
+                                   <td className="px-6 py-4 whitespace-nowrap text-sm">
+                                     <span className={getPnLColor(-position.marketValue - position.pnl)}>
+                                       {formatCurrency(-position.marketValue - position.pnl)}
+                                       {getMarginPercentage(-position.marketValue - position.pnl, position.marginBlocked || 0)}
                                      </span>
                                    </td>
                                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
-                                     {formatNumber(position.quantity)}
+                                     {formatCurrency(-position.marketValue)}
+                                     {getMarginPercentage(-position.marketValue, position.marginBlocked || 0)}
                                    </td>
                                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
                                      {formatCurrencyWithDecimals(position.averagePrice)}
                                    </td>
                                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
                                      {formatCurrencyWithDecimals(position.lastPrice)}
-                                   </td>
-                                   <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
-                                     {formatCurrency(position.marketValue)}
                                    </td>
                                    <td className="px-6 py-4 whitespace-nowrap text-sm">
                                      <span className={getPnLColor(position.pnl)}>
@@ -877,47 +974,108 @@ export default function Positions() {
                                  </tr>
                                  
                                  {/* Expanded Account Breakdown */}
-                                 {position.accounts && position.accounts.length > 1 && expandedPositions.has(position.id) && (
+                                 {expandedPositions.has(position.id) && (
                                    <>
-                                     {position.accounts.map((account, index) => (
-                                       <tr key={`${position.id}-${account.id}`} className="bg-gray-50 border-l-4 border-primary-200">
+                                     {position.accounts ? (
+                                       // Family view - show individual accounts
+                                       position.accounts.map((account, index) => (
+                                         <tr key={`${position.id}-${account.id}`} className="bg-gray-50 border-l-4 border-primary-200">
+                                           <td className="px-6 py-3 whitespace-nowrap pl-12">
+                                             <div className="text-sm text-gray-600">
+                                               <span className="font-medium">{account.name}</span>
+                                               <span className="text-xs text-gray-400 ml-2">(Account)</span>
+                                             </div>
+                                           </td>
+                                           {!selectedFamilyName && (
+                                             <td className="px-6 py-3 whitespace-nowrap">
+                                               <div className="text-sm text-gray-600">
+                                                 {account.family || 'Unknown'}
+                                               </div>
+                                             </td>
+                                           )}
+                                           <td className="px-6 py-3 whitespace-nowrap text-sm text-gray-600">
+                                             {account.quantity !== undefined ? formatNumber(account.quantity) : 'N/A'}
+                                           </td>
+                                           <td className="px-6 py-3 whitespace-nowrap text-sm text-gray-600">
+                                             {position.symbolMargin !== undefined && account.quantity !== undefined ? 
+                                               formatCurrency(Math.abs(account.quantity) * position.symbolMargin) : 'N/A'}
+                                           </td>
+                                           <td className="px-6 py-3 whitespace-nowrap text-sm text-gray-600">
+                                             {account.marketValue !== undefined && account.pnl !== undefined ? (
+                                               <span className={getPnLColor(-account.marketValue - account.pnl)}>
+                                                 {formatCurrency(-account.marketValue - account.pnl)}
+                                                 {getMarginPercentage(-account.marketValue - account.pnl, Math.abs(account.quantity || 0) * (position.symbolMargin || 0))}
+                                               </span>
+                                             ) : 'N/A'}
+                                           </td>
+                                           <td className="px-6 py-3 whitespace-nowrap text-sm text-gray-600">
+                                             {account.marketValue !== undefined ? (
+                                               <>
+                                                 {formatCurrency(-account.marketValue)}
+                                                 {getMarginPercentage(-account.marketValue, Math.abs(account.quantity || 0) * (position.symbolMargin || 0))}
+                                               </>
+                                             ) : 'N/A'}
+                                           </td>
+                                           <td className="px-6 py-3 whitespace-nowrap text-sm text-gray-600">
+                                             {account.averagePrice !== undefined ? formatCurrencyWithDecimals(account.averagePrice) : 'N/A'}
+                                           </td>
+                                           <td className="px-6 py-3 whitespace-nowrap text-sm text-gray-600">
+                                             {account.lastPrice !== undefined ? formatCurrencyWithDecimals(account.lastPrice) : 'N/A'}
+                                           </td>
+                                           <td className="px-6 py-3 whitespace-nowrap text-sm text-gray-600">
+                                             {account.pnl !== undefined ? (
+                                               <span className={getPnLColor(account.pnl)}>
+                                                 {formatCurrency(account.pnl)}
+                                               </span>
+                                             ) : 'N/A'}
+                                           </td>
+                                         </tr>
+                                       ))
+                                     ) : (
+                                       // Individual view - show position details
+                                       <tr className="bg-gray-50 border-l-4 border-primary-200">
                                          <td className="px-6 py-3 whitespace-nowrap pl-12">
                                            <div className="text-sm text-gray-600">
-                                             <span className="font-medium">{account.name}</span>
+                                             <span className="font-medium">{position.account?.name || 'Unknown Account'}</span>
                                              <span className="text-xs text-gray-400 ml-2">(Account)</span>
                                            </div>
                                          </td>
-                                         <td className="px-6 py-3 whitespace-nowrap">
-                                           <div className="text-sm text-gray-600">
-                                             {account.family || 'Unknown'}
-                                           </div>
+                                         {!selectedFamilyName && (
+                                           <td className="px-6 py-3 whitespace-nowrap">
+                                             <div className="text-sm text-gray-600">
+                                               {position.family || 'Unknown'}
+                                             </div>
+                                           </td>
+                                         )}
+                                         <td className="px-6 py-3 whitespace-nowrap text-sm text-gray-600">
+                                           {formatNumber(position.quantity)}
                                          </td>
-                                         <td className="px-6 py-3 whitespace-nowrap">
-                                           <span className={`inline-flex px-2 py-1 text-xs font-semibold rounded-full ${getSideColor(position.side)}`}>
-                                             {position.side}
+                                         <td className="px-6 py-3 whitespace-nowrap text-sm text-gray-600">
+                                           {formatCurrency(position.marginBlocked || 0)}
+                                         </td>
+                                         <td className="px-6 py-3 whitespace-nowrap text-sm text-gray-600">
+                                           <span className={getPnLColor(-position.marketValue - position.pnl)}>
+                                             {formatCurrency(-position.marketValue - position.pnl)}
+                                             {getMarginPercentage(-position.marketValue - position.pnl, position.marginBlocked || 0)}
                                            </span>
                                          </td>
                                          <td className="px-6 py-3 whitespace-nowrap text-sm text-gray-600">
-                                           {account.quantity !== undefined ? formatNumber(account.quantity) : 'N/A'}
+                                           {formatCurrency(-position.marketValue)}
+                                           {getMarginPercentage(-position.marketValue, position.marginBlocked || 0)}
                                          </td>
                                          <td className="px-6 py-3 whitespace-nowrap text-sm text-gray-600">
-                                           {account.averagePrice !== undefined ? formatCurrencyWithDecimals(account.averagePrice) : 'N/A'}
+                                           {formatCurrencyWithDecimals(position.averagePrice)}
                                          </td>
                                          <td className="px-6 py-3 whitespace-nowrap text-sm text-gray-600">
-                                           {account.lastPrice !== undefined ? formatCurrencyWithDecimals(account.lastPrice) : 'N/A'}
+                                           {formatCurrencyWithDecimals(position.lastPrice)}
                                          </td>
                                          <td className="px-6 py-3 whitespace-nowrap text-sm text-gray-600">
-                                           {account.marketValue !== undefined ? formatCurrency(account.marketValue) : 'N/A'}
-                                         </td>
-                                         <td className="px-6 py-3 whitespace-nowrap text-sm text-gray-600">
-                                           {account.pnl !== undefined ? (
-                                             <span className={getPnLColor(account.pnl)}>
-                                               {formatCurrency(account.pnl)}
-                                             </span>
-                                           ) : 'N/A'}
+                                           <span className={getPnLColor(position.pnl)}>
+                                             {formatCurrency(position.pnl)}
+                                           </span>
                                          </td>
                                        </tr>
-                                     ))}
+                                     )}
                                    </>
                                  )}
                                </React.Fragment>
@@ -930,7 +1088,7 @@ export default function Positions() {
                            <React.Fragment key={month}>
                              {/* Month Header Row */}
                              <tr className="bg-gray-100 border-b-2 border-gray-300">
-                               <td colSpan={7} className="px-6 py-3">
+                               <td colSpan={selectedFamilyName ? 7 : 8} className="px-6 py-3">
                                  <div className="flex items-center justify-between">
                                    <div className="flex items-center">
                                      <h3 className="text-lg font-semibold text-gray-800">{month}</h3>
@@ -960,24 +1118,32 @@ export default function Positions() {
                              {expandedMonths.has(month) && monthPositions.map((position) => (
                                <tr key={position.id} className={`hover:bg-gray-50 ${getRowBackgroundColor(position)}`}>
                                  <td className="px-6 py-4 whitespace-nowrap">
-                                   <div className="text-sm font-medium text-gray-900">{position.tradingSymbol}</div>
-                                 </td>
-                                 <td className="px-6 py-4 whitespace-nowrap">
-                                   <span className={`inline-flex px-2 py-1 text-xs font-semibold rounded-full ${getSideColor(position.side)}`}>
-                                     {position.side}
-                                   </span>
+                                   <div className="flex items-center">
+                                     <div className={`w-3 h-3 rounded-full mr-2 ${position.side === 'BUY' ? 'bg-green-500' : 'bg-red-500'}`}></div>
+                                     <div className="text-sm font-medium text-gray-900">{position.tradingSymbol}</div>
+                                   </div>
                                  </td>
                                  <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
                                    {formatNumber(position.quantity)}
+                                 </td>
+                                 <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
+                                   {formatCurrency(position.marginBlocked || 0)}
+                                 </td>
+                                 <td className="px-6 py-4 whitespace-nowrap text-sm">
+                                   <span className={getPnLColor(-position.marketValue - position.pnl)}>
+                                     {formatCurrency(-position.marketValue - position.pnl)}
+                                     {getMarginPercentage(-position.marketValue - position.pnl, position.marginBlocked || 0)}
+                                   </span>
+                                 </td>
+                                 <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
+                                   {formatCurrency(-position.marketValue)}
+                                   {getMarginPercentage(-position.marketValue, position.marginBlocked || 0)}
                                  </td>
                                  <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
                                    {formatCurrencyWithDecimals(position.averagePrice)}
                                  </td>
                                  <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
                                    {formatCurrencyWithDecimals(position.lastPrice)}
-                                 </td>
-                                 <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
-                                   {formatCurrency(position.marketValue)}
                                  </td>
                                  <td className="px-6 py-4 whitespace-nowrap text-sm">
                                    <span className={getPnLColor(position.pnl)}>

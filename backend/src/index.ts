@@ -15,6 +15,7 @@ import marginsRoutes from './routes/margins';
 import captureTokenRoutes from './routes/captureToken';
 import pnlRoutes from './routes/pnl';
 import dividendRoutes from './routes/dividends';
+import symbolAndMarginsRoutes from './routes/symbolAndMargins';
 
 // Load environment variables
 dotenv.config();
@@ -58,6 +59,7 @@ app.use('/api/margins', marginsRoutes);
 app.use('/api/captureToken', captureTokenRoutes);
 app.use('/api/pnl', pnlRoutes);
 app.use('/api/dividends', dividendRoutes);
+app.use('/api/symbolAndMargins', symbolAndMarginsRoutes);
 
 // Direct auth routes (for easier redirect handling) - must be before 404 handler
 app.use('/captureToken', captureTokenRoutes);

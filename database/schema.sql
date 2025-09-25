@@ -1,13 +1,3 @@
--- Create users table
-CREATE TABLE IF NOT EXISTS users (
-    id SERIAL PRIMARY KEY,
-    email VARCHAR(255) UNIQUE NOT NULL,
-    password VARCHAR(255) NOT NULL,
-    name VARCHAR(255) NOT NULL,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-);
-
 -- Create accounts table
 CREATE TABLE IF NOT EXISTS accounts (
     id SERIAL PRIMARY KEY,
@@ -19,7 +9,9 @@ CREATE TABLE IF NOT EXISTS accounts (
     last_sync TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    user_id INTEGER REFERENCES users(id) ON DELETE CASCADE
+    user_id VARCHAR(255),
+    password VARCHAR(255),
+    totp_secret VARCHAR(255)
 );
 
 -- Create holdings table
@@ -69,11 +61,6 @@ CREATE TABLE IF NOT EXISTS portfolio_snapshots (
     account_id INTEGER REFERENCES accounts(id) ON DELETE CASCADE,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
-
--- Insert a default user for testing
-INSERT INTO users (email, password, name) VALUES 
-('test@example.com', '$2a$10$dummy.hash.for.testing', 'Test User')
-ON CONFLICT (email) DO NOTHING;
 
 -- Create indexes for better performance
 CREATE INDEX IF NOT EXISTS idx_accounts_user_id ON accounts(user_id);

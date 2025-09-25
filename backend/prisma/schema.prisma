@@ -7,40 +7,29 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
-model User {
-  id        Int       @id @default(autoincrement())
-  email     String    @unique
-  password  String
-  name      String
-  createdAt DateTime  @default(now())
-  updatedAt DateTime  @updatedAt
-  accounts  Account[]
-
-  @@map("users")
-}
-
 model Account {
-  id          Int      @id @default(autoincrement())
-  name        String
-  family      String?
-  apiKey      String
-  apiSecret   String
-  accessToken String?
-  refreshToken String?
-  requestToken String?
-  description String?
-  isActive    Boolean  @default(true)
-  lastSync    DateTime?
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
-  userId      Int?
-  user        User?    @relation(fields: [userId], references: [id], onDelete: Cascade)
-  positions   Position[]
-  holdings    Holding[]
-  snapshots   PortfolioSnapshot[]
-  margins     Margin[]
-  pnlUploads  PnLUpload[]
+  id              Int                 @id @default(autoincrement())
+  name            String
+  apiKey          String?
+  lastSync        DateTime?
+  createdAt       DateTime            @default(now())
+  updatedAt       DateTime            @updatedAt
+  userId          String?
+  password        String?
+  apiSecret       String?
+  family          String?
+  accessToken     String?
+  refreshToken    String?
+  description     String?
+  isActive        Boolean             @default(true)
+  requestToken    String?
+  totpSecret      String?
   dividendUploads DividendUpload[]
+  holdings        Holding[]
+  margins         Margin[]
+  pnlUploads      PnLUpload[]
+  snapshots       PortfolioSnapshot[]
+  positions       Position[]
 
   @@map("accounts")
 }
@@ -107,105 +96,116 @@ model PortfolioSnapshot {
 }
 
 model Margin {
-  id                Int      @id @default(autoincrement())
-  accountId         Int
-  segment           String
-  enabled           Boolean
-  net               Float
-  debits            Float
-  payout            Float
-  liquidCollateral  Float
-  stockCollateral   Float
-  span              Float
-  exposure          Float
-  additional        Float
-  delivery          Float
-  optionPremium     Float
-  holdingSales      Float
-  turnover          Float
-  equity            Float
-  m2mRealised       Float
-  m2mUnrealised     Float
-  createdAt         DateTime @default(now())
-  updatedAt         DateTime @updatedAt
-  account           Account  @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  id               Int      @id @default(autoincrement())
+  accountId        Int
+  segment          String
+  enabled          Boolean
+  net              Float
+  debits           Float
+  payout           Float
+  liquidCollateral Float
+  stockCollateral  Float
+  span             Float
+  exposure         Float
+  additional       Float
+  delivery         Float
+  optionPremium    Float
+  holdingSales     Float
+  turnover         Float
+  equity           Float
+  m2mRealised      Float
+  m2mUnrealised    Float
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+  account          Account  @relation(fields: [accountId], references: [id], onDelete: Cascade)
 
   @@map("margins")
 }
 
 model PnLUpload {
-  id        Int      @id @default(autoincrement())
-  accountId Int
-  account   Account  @relation(fields: [accountId], references: [id], onDelete: Cascade)
-  fileName  String
-  uploadDate DateTime @default(now())
-  status    String   @default("processing") // processing, completed, failed
-  records   PnLRecord[]
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  id         Int         @id @default(autoincrement())
+  accountId  Int
+  fileName   String
+  uploadDate DateTime    @default(now())
+  status     String      @default("processing")
+  createdAt  DateTime    @default(now())
+  updatedAt  DateTime    @updatedAt
+  records    PnLRecord[]
+  account    Account     @relation(fields: [accountId], references: [id], onDelete: Cascade)
 
   @@map("pnl_uploads")
 }
 
 model PnLRecord {
-  id           Int       @id @default(autoincrement())
-  uploadId     Int
-  upload       PnLUpload @relation(fields: [uploadId], references: [id], onDelete: Cascade)
-  instrumentType String  // Equity - Intraday, Equity - Short Term, etc.
-  symbol       String?
-  isin         String?
-  entryDate    DateTime?
-  exitDate     DateTime?
-  quantity     Float?
-  buyValue     Float?
-  sellValue    Float?
-  profit       Float?
-  periodOfHolding String?
-  fairMarketValue Float?
-  taxableProfit Float?
-  turnover     Float?
-  brokerage    Float?
+  id                         Int       @id @default(autoincrement())
+  uploadId                   Int
+  instrumentType             String
+  symbol                     String?
+  isin                       String?
+  entryDate                  DateTime?
+  exitDate                   DateTime?
+  quantity                   Float?
+  buyValue                   Float?
+  sellValue                  Float?
+  profit                     Float?
+  periodOfHolding            String?
+  fairMarketValue            Float?
+  taxableProfit              Float?
+  turnover                   Float?
+  brokerage                  Float?
   exchangeTransactionCharges Float?
-  ipft         Float?
-  sebiCharges  Float?
-  cgst         Float?
-  sgst         Float?
-  igst         Float?
-  stampDuty    Float?
-  stt          Float?
-  createdAt    DateTime  @default(now())
-  updatedAt    DateTime  @updatedAt
+  ipft                       Float?
+  sebiCharges                Float?
+  cgst                       Float?
+  sgst                       Float?
+  igst                       Float?
+  stampDuty                  Float?
+  stt                        Float?
+  createdAt                  DateTime  @default(now())
+  updatedAt                  DateTime  @updatedAt
+  upload                     PnLUpload @relation(fields: [uploadId], references: [id], onDelete: Cascade)
 
   @@map("pnl_records")
 }
 
 model DividendUpload {
-  id        Int      @id @default(autoincrement())
-  accountId Int
-  account   Account  @relation(fields: [accountId], references: [id], onDelete: Cascade)
-  fileName  String
-  uploadDate DateTime @default(now())
-  status    String   @default("processing") // processing, completed, failed
-  records   DividendRecord[]
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  id         Int              @id @default(autoincrement())
+  accountId  Int
+  fileName   String
+  uploadDate DateTime         @default(now())
+  status     String           @default("processing")
+  createdAt  DateTime         @default(now())
+  updatedAt  DateTime         @updatedAt
+  records    DividendRecord[]
+  account    Account          @relation(fields: [accountId], references: [id], onDelete: Cascade)
 
   @@map("dividend_uploads")
 }
 
 model DividendRecord {
-  id           Int       @id @default(autoincrement())
-  uploadId     Int
-  upload       DividendUpload @relation(fields: [uploadId], references: [id], onDelete: Cascade)
-  symbol       String?
-  isin         String?
-  exDate       DateTime?
-  quantity     Float?
-  dividendPerShare Float?
+  id                Int            @id @default(autoincrement())
+  uploadId          Int
+  symbol            String?
+  isin              String?
+  exDate            DateTime?
+  quantity          Float?
+  dividendPerShare  Float?
   netDividendAmount Float?
-  createdAt    DateTime  @default(now())
-  updatedAt    DateTime  @updatedAt
+  createdAt         DateTime       @default(now())
+  updatedAt         DateTime       @updatedAt
+  upload            DividendUpload @relation(fields: [uploadId], references: [id], onDelete: Cascade)
 
   @@unique([uploadId, symbol, isin, exDate, quantity, dividendPerShare, netDividendAmount], name: "unique_dividend_record")
   @@map("dividend_records")
+}
+
+model SymbolAndMargin {
+  id            Int      @id @default(autoincrement())
+  symbolPrefix  String
+  margin        Float
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  @@unique([symbolPrefix], name: "unique_symbol_prefix")
+  @@map("symbol_and_margins")
 }

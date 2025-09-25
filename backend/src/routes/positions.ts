@@ -2,7 +2,62 @@ import express, { Request, Response, NextFunction } from 'express';
 import { prisma } from '../index';
 import { KiteConnect } from 'kiteconnect';
 
+// Helper function to extract symbol prefix from trading symbol
+function extractSymbolPrefix(tradingSymbol: string): string {
+  // Remove any trailing numbers and special characters to get the base symbol
+  // For example: "copper25sep870pe" -> "copper"
+  const match = tradingSymbol.match(/^([a-zA-Z]+)/);
+  return match ? match[1].toLowerCase() : tradingSymbol.toLowerCase();
+}
+
+// Helper function to get margin for a symbol
+async function getMarginForSymbol(tradingSymbol: string): Promise<number> {
+  try {
+    const symbolPrefix = extractSymbolPrefix(tradingSymbol);
+    console.log(`Looking up margin for symbol: "${tradingSymbol}" -> prefix: "${symbolPrefix}"`);
+    
+    const symbolMargin = await prisma.symbolAndMargin.findFirst({
+      where: {
+        symbolPrefix: {
+          equals: symbolPrefix,
+          mode: 'insensitive'
+        }
+      }
+    });
+    
+    console.log(`Found margin record:`, symbolMargin);
+    return symbolMargin ? symbolMargin.margin : 0;
+  } catch (error) {
+    console.error('Error fetching margin for symbol:', tradingSymbol, error);
+    return 0;
+  }
+}
+
 const router = express.Router();
+
+// Debug endpoint to test margin lookup
+router.get('/debug-margins', async (req: Request, res: Response) => {
+  try {
+    // Get all margin records
+    const allMargins = await prisma.symbolAndMargin.findMany();
+    console.log('All margin records:', allMargins);
+    
+    // Test with a sample symbol
+    const testSymbol = 'copper25sep870pe';
+    const prefix = extractSymbolPrefix(testSymbol);
+    const margin = await getMarginForSymbol(testSymbol);
+    
+    res.json({
+      allMargins,
+      testSymbol,
+      extractedPrefix: prefix,
+      foundMargin: margin
+    });
+  } catch (error) {
+    console.error('Debug error:', error);
+    res.status(500).json({ error: 'Debug failed', message: error });
+  }
+});
 
 // Get real-time positions from Zerodha
 router.get('/live/:accountId', async (req: Request, res: Response) => {
@@ -152,12 +207,23 @@ router.get('/', async (req: Request, res: Response) => {
       // Group positions by trading symbol and family
       const familyPositions = new Map<string, any>();
       
+      // Get all unique trading symbols to fetch margins in batch
+      const uniqueSymbols = [...new Set(positions.map(p => p.tradingSymbol))];
+      const symbolMargins = new Map<string, number>();
+      
+      // Fetch margins for all symbols
+      for (const symbol of uniqueSymbols) {
+        const margin = await getMarginForSymbol(symbol);
+        symbolMargins.set(symbol, margin);
+      }
+      
       positions.forEach(position => {
         const familyKey = position.account?.family || 'Unknown';
         const symbolKey = `${position.tradingSymbol}-${position.side}`;
         const key = `${familyKey}-${symbolKey}`;
         
         if (!familyPositions.has(key)) {
+          const margin = symbolMargins.get(position.tradingSymbol) || 0;
           familyPositions.set(key, {
             id: key,
             tradingSymbol: position.tradingSymbol,
@@ -173,6 +239,8 @@ router.get('/', async (req: Request, res: Response) => {
             family: familyKey,
             accountIds: [],
             accounts: [],
+            marginBlocked: 0,
+            symbolMargin: margin,
             createdAt: position.createdAt,
             updatedAt: position.updatedAt,
           });
@@ -213,6 +281,8 @@ router.get('/', async (req: Request, res: Response) => {
           ...pos,
           // Market value and P&L are already summed up from individual positions
           pnlPercentage: pos.averagePrice > 0 ? (pos.pnl / (pos.averagePrice * Math.abs(pos.quantity))) * 100 : 0,
+          // Calculate margin blocked: quantity * symbol margin
+          marginBlocked: Math.abs(pos.quantity) * pos.symbolMargin,
         }));
 
       res.json({ positions: aggregatedPositions });
@@ -231,7 +301,19 @@ router.get('/', async (req: Request, res: Response) => {
         orderBy: { createdAt: 'desc' },
       });
 
-      res.json({ positions });
+      // Add margin blocked calculation for individual positions
+      const positionsWithMargin = await Promise.all(
+        positions.map(async (position) => {
+          const margin = await getMarginForSymbol(position.tradingSymbol);
+          return {
+            ...position,
+            marginBlocked: Math.abs(position.quantity) * margin,
+            symbolMargin: margin,
+          };
+        })
+      );
+
+      res.json({ positions: positionsWithMargin });
     }
   } catch (error) {
     console.error('Get positions error:', error);
@@ -278,12 +360,23 @@ router.get('/summary', async (req: Request, res: Response) => {
       // Group positions by trading symbol and family
       const familyPositions = new Map<string, any>();
       
+      // Get all unique trading symbols to fetch margins in batch
+      const uniqueSymbols = [...new Set(positions.map(p => p.tradingSymbol))];
+      const symbolMargins = new Map<string, number>();
+      
+      // Fetch margins for all symbols
+      for (const symbol of uniqueSymbols) {
+        const margin = await getMarginForSymbol(symbol);
+        symbolMargins.set(symbol, margin);
+      }
+      
       positions.forEach(position => {
         const familyKey = position.account?.family || 'Unknown';
         const symbolKey = `${position.tradingSymbol}-${position.side}`;
         const key = `${familyKey}-${symbolKey}`;
         
         if (!familyPositions.has(key)) {
+          const margin = symbolMargins.get(position.tradingSymbol) || 0;
           familyPositions.set(key, {
             tradingSymbol: position.tradingSymbol,
             quantity: 0,
@@ -295,6 +388,8 @@ router.get('/summary', async (req: Request, res: Response) => {
             product: position.product,
             side: position.side,
             family: familyKey,
+            marginBlocked: 0,
+            symbolMargin: margin,
           });
         }
         
@@ -320,6 +415,8 @@ router.get('/summary', async (req: Request, res: Response) => {
         .map(pos => ({
           ...pos,
           // Market value and P&L are already summed up from individual positions
+          // Calculate margin blocked: quantity * symbol margin
+          marginBlocked: Math.abs(pos.quantity) * pos.symbolMargin,
         }));
 
       // Calculate summary for family positions
@@ -376,14 +473,26 @@ router.get('/summary', async (req: Request, res: Response) => {
         },
       });
 
+      // Add margin blocked calculation for individual positions
+      const positionsWithMargin = await Promise.all(
+        positions.map(async (position) => {
+          const margin = await getMarginForSymbol(position.tradingSymbol);
+          return {
+            ...position,
+            marginBlocked: Math.abs(position.quantity) * margin,
+            symbolMargin: margin,
+          };
+        })
+      );
+
       // Calculate summary
-      const totalMarketValue = positions.reduce((sum, p) => sum + p.marketValue, 0);
-      const totalPnL = positions.reduce((sum, p) => sum + p.pnl, 0);
-      const totalInvestment = positions.reduce((sum, p) => sum + (p.averagePrice * p.quantity), 0);
+      const totalMarketValue = positionsWithMargin.reduce((sum, p) => sum + p.marketValue, 0);
+      const totalPnL = positionsWithMargin.reduce((sum, p) => sum + p.pnl, 0);
+      const totalInvestment = positionsWithMargin.reduce((sum, p) => sum + (p.averagePrice * p.quantity), 0);
       const totalPnLPercentage = totalInvestment > 0 ? (totalPnL / totalInvestment) * 100 : 0;
 
       // Group by product type
-      const productBreakdown = positions.reduce((acc, position) => {
+      const productBreakdown = positionsWithMargin.reduce((acc, position) => {
         const product = position.product || 'Others';
         if (!acc[product]) {
           acc[product] = { value: 0, count: 0 };
@@ -394,7 +503,7 @@ router.get('/summary', async (req: Request, res: Response) => {
       }, {} as Record<string, { value: number; count: number }>);
 
       // Group by side (BUY/SELL)
-      const sideBreakdown = positions.reduce((acc, position) => {
+      const sideBreakdown = positionsWithMargin.reduce((acc, position) => {
         const side = position.side || 'Others';
         if (!acc[side]) {
           acc[side] = { value: 0, count: 0 };
@@ -406,7 +515,7 @@ router.get('/summary', async (req: Request, res: Response) => {
 
       res.json({
         summary: {
-          totalPositions: positions.length,
+          totalPositions: positionsWithMargin.length,
           totalMarketValue,
           totalPnL,
           totalPnLPercentage,
@@ -414,7 +523,7 @@ router.get('/summary', async (req: Request, res: Response) => {
         },
         productBreakdown,
         sideBreakdown,
-        positions,
+        positions: positionsWithMargin,
       });
     }
   } catch (error) {

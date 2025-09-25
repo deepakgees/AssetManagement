@@ -17,7 +17,7 @@ import {
   InformationCircleIcon,
 } from '@heroicons/react/24/outline';
 import Layout from '../components/Layout';
-import { getAccounts, createAccount, updateAccount, deleteAccount, syncAccount, getLoginUrl, exchangeToken, type Account, type CreateAccountData, type UpdateAccountData } from '../services/accountsService';
+import { getAccounts, createAccount, updateAccount, deleteAccount, syncAccount, syncAllAccounts, getLoginUrl, exchangeToken, type Account, type CreateAccountData, type UpdateAccountData } from '../services/accountsService';
 
 interface Message {
   id: string;
@@ -151,6 +151,19 @@ export default function Accounts() {
     },
   });
 
+  const syncAllAccountsMutation = useMutation({
+    mutationFn: syncAllAccounts,
+    onSuccess: (data) => {
+      queryClient.invalidateQueries({ queryKey: ['accounts'] });
+      queryClient.invalidateQueries({ queryKey: ['holdings'] });
+      queryClient.invalidateQueries({ queryKey: ['positions'] });
+      addMessage('success', 'All accounts synced successfully!');
+    },
+    onError: (error: any) => {
+      addMessage('error', `Sync all failed: ${error.response?.data?.message || error.message}`);
+    },
+  });
+
   const handleOpenDialog = (account?: Account) => {
     if (account) {
       setEditingAccount(account);
@@ -223,6 +236,12 @@ export default function Accounts() {
     }
   };
 
+  const handleSyncAll = () => {
+    if (window.confirm('Are you sure you want to sync all accounts? This may take a few minutes.')) {
+      syncAllAccountsMutation.mutate();
+    }
+  };
+
   const formatDate = (dateString: string) => {
     return new Date(dateString).toLocaleString();
   };
@@ -236,13 +255,22 @@ export default function Accounts() {
     <Layout>
       <div className="mb-6 flex justify-between items-center">
         <h1 className="text-2xl font-bold text-gray-900">Account Management</h1>
-        <button
-          onClick={() => handleOpenDialog()}
-          className="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md shadow-sm text-white bg-primary-600 hover:bg-primary-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-primary-500"
-        >
-          <PlusIcon className="h-4 w-4 mr-2" />
-          Add Account
-        </button>
+        <div className="flex gap-3">
+          <button
+            onClick={() => handleSyncAll()}
+            className="inline-flex items-center px-4 py-2 border border-gray-300 text-sm font-medium rounded-md shadow-sm text-gray-700 bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-primary-500"
+          >
+            <ArrowPathIcon className="h-4 w-4 mr-2" />
+            Sync All
+          </button>
+          <button
+            onClick={() => handleOpenDialog()}
+            className="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md shadow-sm text-white bg-primary-600 hover:bg-primary-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-primary-500"
+          >
+            <PlusIcon className="h-4 w-4 mr-2" />
+            Add Account
+          </button>
+        </div>
       </div>
 
       <div className="bg-white shadow rounded-lg">
