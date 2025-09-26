@@ -1,7 +1,7 @@
 {
   "name": "zerodha-portfolio-backend",
   "version": "1.0.0",
-  "description": "Backend for Zerodha Portfolio Tracker",
+  "description": "Backend for Asset Management",
   "main": "dist/index.js",
   "scripts": {
     "dev": "nodemon --config nodemon.json",

@@ -1,4 +1,4 @@
-# Zerodha Portfolio Tracker
+# Asset Management
 
 A comprehensive multi-account portfolio tracking application for Zerodha users, built with modern web technologies.
 

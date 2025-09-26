@@ -1,7 +1,7 @@
 #!/bin/bash
 
-# Zerodha Portfolio Tracker Setup Script
-echo "🚀 Setting up Zerodha Portfolio Tracker..."
+# Asset Management Setup Script
+echo "🚀 Setting up Asset Management..."
 
 # Check if Node.js is installed
 if ! command -v node &> /dev/null; then
