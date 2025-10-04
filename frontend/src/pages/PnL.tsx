@@ -94,6 +94,19 @@ const PnL: React.FC = () => {
       transactionCount: number;
     };
   }>({});
+
+  // P&L summary states
+  const [pnlSummary, setPnlSummary] = useState<{
+    [accountId: number]: {
+      accountName: string;
+      startDate: string | null;
+      endDate: string | null;
+      totalPnL: number;
+      totalRecords: number;
+      positiveRecords: number;
+      negativeRecords: number;
+    };
+  }>({});
   
   // Fund transaction states
   const [fundTransactionForm, setFundTransactionForm] = useState<CreateFundTransactionData>({
@@ -792,6 +805,60 @@ const PnL: React.FC = () => {
     setFundTransactionSummary(summary);
   }, [filteredFundTransactions]);
 
+  // Calculate P&L summary
+  useEffect(() => {
+    if (!filteredRecords || filteredRecords.length === 0) {
+      setPnlSummary({});
+      return;
+    }
+
+    const summary: typeof pnlSummary = {};
+    
+    // Group records by account
+    const recordsByAccount = filteredRecords.reduce((acc, record) => {
+      const accountId = record.accountId;
+      if (!acc[accountId]) {
+        acc[accountId] = [];
+      }
+      acc[accountId].push(record);
+      return acc;
+    }, {} as { [accountId: number]: any[] });
+
+    // Calculate summary for each account
+    Object.entries(recordsByAccount).forEach(([accountIdStr, records]) => {
+      const accountId = parseInt(accountIdStr);
+      const account = accounts?.find(acc => acc.id === accountId);
+      const accountName = account?.name || `Account ${accountId}`;
+      
+      // Calculate date range using entryDate and exitDate
+      const entryDates = (records as any[]).map((r: any) => r.entryDate).filter((date: string) => date && date.trim() !== '');
+      const exitDates = (records as any[]).map((r: any) => r.exitDate).filter((date: string) => date && date.trim() !== '');
+      
+      const startDate = entryDates.length > 0 
+        ? new Date(Math.min(...entryDates.map((d: string) => new Date(d).getTime()))).toISOString().split('T')[0] 
+        : null;
+      const endDate = exitDates.length > 0 
+        ? new Date(Math.max(...exitDates.map((d: string) => new Date(d).getTime()))).toISOString().split('T')[0] 
+        : null;
+      
+      // Calculate P&L metrics
+      const totalPnL = (records as any[]).reduce((sum: number, record: any) => sum + (record.profit || 0), 0);
+      const positiveRecords = (records as any[]).filter((r: any) => (r.profit || 0) > 0).length;
+      const negativeRecords = (records as any[]).filter((r: any) => (r.profit || 0) < 0).length;
+      
+      summary[accountId] = {
+        accountName,
+        startDate,
+        endDate,
+        totalPnL,
+        totalRecords: (records as any[]).length,
+        positiveRecords,
+        negativeRecords,
+      };
+    });
+    
+    setPnlSummary(summary);
+  }, [filteredRecords, accounts]);
 
   // Pagination logic
   const totalPages = Math.ceil(filteredRecords.length / itemsPerPage);
@@ -1069,7 +1136,7 @@ const PnL: React.FC = () => {
                   }`}
                 >
                   <ArrowTrendingUpIcon className="h-5 w-5 mr-2" />
-                  Profit & Loss
+                  Profit & Loss Transactions
                 </button>
                 <button
                   onClick={() => setActiveTab('fund-transactions')}
@@ -1091,131 +1158,7 @@ const PnL: React.FC = () => {
             {/* Overview Tab */}
             {activeTab === 'overview' && (
               <div className="space-y-6">
-                {/* Summary Cards */}
-                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
-                  <div className="bg-white overflow-hidden shadow rounded-lg">
-                    <div className="p-5">
-                      <div className="flex items-center">
-                        <div className="flex-shrink-0">
-                          <CurrencyDollarIcon className="h-6 w-6 text-gray-400" />
-                        </div>
-                        <div className="ml-5 w-0 flex-1">
-                          <dl>
-                            <dt className="text-sm font-medium text-gray-500 truncate">Total Profit/Loss</dt>
-                            <dd className="text-lg font-medium text-gray-900">
-                              <span className={totalProfit >= 0 ? 'text-green-600' : 'text-red-600'}>
-                                {formatCurrency(totalProfit)}
-                              </span>
-                            </dd>
-                          </dl>
-                        </div>
-                      </div>
-                    </div>
-                  </div>
 
-                  <div className="bg-white overflow-hidden shadow rounded-lg">
-                    <div className="p-5">
-                      <div className="flex items-center">
-                        <div className="flex-shrink-0">
-                          <ArrowTrendingUpIcon className="h-6 w-6 text-gray-400" />
-                        </div>
-                        <div className="ml-5 w-0 flex-1">
-                          <dl>
-                            <dt className="text-sm font-medium text-gray-500 truncate">Total Records</dt>
-                            <dd className="text-lg font-medium text-gray-900">
-                              {filteredRecords.length}
-                            </dd>
-                          </dl>
-                        </div>
-                      </div>
-                    </div>
-                  </div>
-
-                  <div className="bg-white overflow-hidden shadow rounded-lg">
-                    <div className="p-5">
-                      <div className="flex items-center">
-                        <div className="flex-shrink-0">
-                          <UserGroupIcon className="h-6 w-6 text-gray-400" />
-                        </div>
-                        <div className="ml-5 w-0 flex-1">
-                          <dl>
-                            <dt className="text-sm font-medium text-gray-500 truncate">Family/Account</dt>
-                            <dd className="text-lg font-medium text-gray-900">
-                              {familyView ? (selectedFamilyName || 'All Families') : (selectedAccount ? `Account ${selectedAccount}` : 'All Accounts')}
-                            </dd>
-                          </dl>
-                        </div>
-                      </div>
-                    </div>
-                  </div>
-
-                  <div className="bg-white overflow-hidden shadow rounded-lg">
-                    <div className="p-5">
-                      <div className="flex items-center">
-                        <div className="flex-shrink-0">
-                          <ArrowTrendingUpIcon className="h-6 w-6 text-gray-400" />
-                        </div>
-                        <div className="ml-5 w-0 flex-1">
-                          <dl>
-                            <dt className="text-sm font-medium text-gray-500 truncate">Total Records</dt>
-                            <dd className="text-lg font-medium text-gray-900">
-                              {filteredRecords.length}
-                            </dd>
-                          </dl>
-                        </div>
-                      </div>
-                    </div>
-                  </div>
-                </div>
-
-                {/* Family Account Breakdown */}
-                {familyAccountBreakdown && familyAccountBreakdown.length > 0 && (
-                  <div className="bg-white shadow overflow-hidden sm:rounded-lg">
-                    <div className="px-4 py-5 sm:p-6">
-                      <h3 className="text-lg font-medium text-gray-900 mb-4">Family Account Breakdown</h3>
-                      <div className="overflow-x-auto">
-                        <table className="min-w-full divide-y divide-gray-200">
-                          <thead className="bg-gray-50">
-                            <tr>
-                              <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                                Account
-                              </th>
-                              <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                                Family
-                              </th>
-                              <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                                Profit/Loss
-                              </th>
-                              <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                                Records
-                              </th>
-                            </tr>
-                          </thead>
-                          <tbody className="bg-white divide-y divide-gray-200">
-                            {familyAccountBreakdown.map((item) => (
-                              <tr key={item.account.id} className="hover:bg-gray-50">
-                                <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">
-                                  {item.account.name}
-                                </td>
-                                <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
-                                  {item.account.family || 'N/A'}
-                                </td>
-                                <td className="px-6 py-4 whitespace-nowrap text-sm">
-                                  <span className={item.profit >= 0 ? 'text-green-600' : 'text-red-600'}>
-                                    {formatCurrency(item.profit)}
-                                  </span>
-                                </td>
-                                <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
-                                  -
-                                </td>
-                              </tr>
-                            ))}
-                          </tbody>
-                        </table>
-                      </div>
-                    </div>
-                  </div>
-                )}
 
                 {/* P&L Chart */}
                 {filteredRecords.length > 0 && (
@@ -1299,10 +1242,10 @@ const PnL: React.FC = () => {
                   {Object.keys(fundTransactionSummary).length > 0 && (
                     <div className="mb-6">
                       <h4 className="text-md font-medium text-gray-900 mb-4">Account Summary</h4>
-                      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-3">
                         {Object.entries(fundTransactionSummary).map(([accountId, summary]) => (
-                          <div key={accountId} className="bg-gray-50 rounded-lg p-4 border border-gray-200">
-                            <div className="flex items-center justify-between mb-3">
+                          <div key={accountId} className="bg-gray-50 rounded-lg p-3 border border-gray-200">
+                            <div className="flex items-center justify-between mb-2">
                               <h5 className="text-sm font-medium text-gray-900 truncate">
                                 {summary.accountName}
                               </h5>
@@ -1311,7 +1254,7 @@ const PnL: React.FC = () => {
                               </span>
                             </div>
                             
-                            <div className="space-y-2">
+                            <div className="space-y-1">
                               {/* Date Range */}
                               <div className="flex justify-between text-xs">
                                 <span className="text-gray-500">Period:</span>
@@ -1349,6 +1292,75 @@ const PnL: React.FC = () => {
                             </div>
                           </div>
                         ))}
+                        
+                        {/* TOTAL Card */}
+                        {(() => {
+                          const totalSummary = Object.values(fundTransactionSummary).reduce((acc, summary) => ({
+                            netAmount: acc.netAmount + summary.netAmount,
+                            totalAdditions: acc.totalAdditions + summary.totalAdditions,
+                            totalWithdrawals: acc.totalWithdrawals + summary.totalWithdrawals,
+                            transactionCount: acc.transactionCount + summary.transactionCount,
+                            startDate: acc.startDate ? (summary.startDate && summary.startDate < acc.startDate ? summary.startDate : acc.startDate) : summary.startDate,
+                            endDate: acc.endDate ? (summary.endDate && summary.endDate > acc.endDate ? summary.endDate : acc.endDate) : summary.endDate,
+                          }), {
+                            netAmount: 0,
+                            totalAdditions: 0,
+                            totalWithdrawals: 0,
+                            transactionCount: 0,
+                            startDate: null as string | null,
+                            endDate: null as string | null,
+                          });
+
+                          return (
+                            <div className="bg-blue-50 rounded-lg p-3 border-2 border-blue-200">
+                              <div className="flex items-center justify-between mb-2">
+                                <h5 className="text-sm font-bold text-blue-900 truncate">
+                                  TOTAL
+                                </h5>
+                                <span className="text-xs text-blue-600 font-medium">
+                                  {totalSummary.transactionCount} transaction{totalSummary.transactionCount !== 1 ? 's' : ''}
+                                </span>
+                              </div>
+                              
+                              <div className="space-y-1">
+                                {/* Date Range */}
+                                <div className="flex justify-between text-xs">
+                                  <span className="text-blue-600 font-medium">Period:</span>
+                                  <span className="text-blue-800 font-medium">
+                                    {totalSummary.startDate && totalSummary.endDate 
+                                      ? `${formatDate(totalSummary.startDate)} - ${formatDate(totalSummary.endDate)}`
+                                      : totalSummary.startDate 
+                                      ? `From ${formatDate(totalSummary.startDate)}`
+                                      : 'No transactions'
+                                    }
+                                  </span>
+                                </div>
+                                
+                                {/* Net Amount */}
+                                <div className="flex justify-between text-xs">
+                                  <span className="text-blue-600 font-medium">Net Amount:</span>
+                                  <span className={`font-bold ${
+                                    totalSummary.netAmount >= 0 ? 'text-green-600' : 'text-red-600'
+                                  }`}>
+                                    {totalSummary.netAmount >= 0 ? '+' : ''}{formatCurrency(totalSummary.netAmount)}
+                                  </span>
+                                </div>
+                                
+                                {/* Breakdown */}
+                                <div className="pt-2 border-t border-blue-200">
+                                  <div className="flex justify-between text-xs mb-1">
+                                    <span className="text-blue-600 font-medium">Additions:</span>
+                                    <span className="text-green-600 font-medium">+{formatCurrency(totalSummary.totalAdditions)}</span>
+                                  </div>
+                                  <div className="flex justify-between text-xs">
+                                    <span className="text-blue-600 font-medium">Withdrawals:</span>
+                                    <span className="text-red-600 font-medium">-{formatCurrency(totalSummary.totalWithdrawals)}</span>
+                                  </div>
+                                </div>
+                              </div>
+                            </div>
+                          );
+                        })()}
                       </div>
                     </div>
                   )}
@@ -1537,15 +1549,24 @@ const PnL: React.FC = () => {
                         <FunnelIcon className="h-5 w-5 text-gray-400 mr-2" />
                         <h3 className="text-lg font-medium text-gray-900">Filters</h3>
                       </div>
-                      <button
-                        onClick={handleRefresh}
-                        disabled={refreshing}
-                        className="inline-flex items-center px-3 py-2 border border-gray-300 shadow-sm text-sm leading-4 font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500 disabled:opacity-50 disabled:cursor-not-allowed"
-                        title="Refresh data based on current filters"
-                      >
-                        <ArrowPathIcon className={`h-4 w-4 mr-1 ${refreshing ? 'animate-spin' : ''}`} />
-                        {refreshing ? 'Refreshing...' : 'Refresh'}
-                      </button>
+                      <div className="flex items-center gap-3">
+                        <button
+                          onClick={() => setShowUploadModal(true)}
+                          className="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md shadow-sm text-white bg-indigo-600 hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500"
+                        >
+                          <CloudArrowUpIcon className="h-4 w-4 mr-2" />
+                          Upload CSV
+                        </button>
+                        <button
+                          onClick={handleRefresh}
+                          disabled={refreshing}
+                          className="inline-flex items-center px-3 py-2 border border-gray-300 shadow-sm text-sm leading-4 font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500 disabled:opacity-50 disabled:cursor-not-allowed"
+                          title="Refresh data based on current filters"
+                        >
+                          <ArrowPathIcon className={`h-4 w-4 mr-1 ${refreshing ? 'animate-spin' : ''}`} />
+                          {refreshing ? 'Refreshing...' : 'Refresh'}
+                        </button>
+                      </div>
                     </div>
                     <div className="flex items-end gap-4">
                       <div className="flex-1 max-w-48">
@@ -1603,27 +1624,132 @@ const PnL: React.FC = () => {
                   </div>
                 </div>
 
-                {/* Upload CSV Section */}
-                <div className="bg-white shadow sm:rounded-lg">
-                  <div className="px-4 py-5 sm:p-6">
-                    <div className="flex items-center justify-between">
-                      <div className="flex items-center">
-                        <CloudArrowUpIcon className="h-5 w-5 text-gray-400 mr-2" />
-                        <h3 className="text-lg font-medium text-gray-900">Upload P&L Records</h3>
-                      </div>
-                      <button
-                        onClick={() => setShowUploadModal(true)}
-                        className="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md shadow-sm text-white bg-indigo-600 hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500"
-                      >
-                        <CloudArrowUpIcon className="h-4 w-4 mr-2" />
-                        Upload CSV
-                      </button>
+                {/* P&L Summary */}
+                {Object.keys(pnlSummary).length > 0 && (
+                  <div className="mb-6">
+                    <h4 className="text-md font-medium text-gray-900 mb-4">Account Summary</h4>
+                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-3">
+                      {Object.entries(pnlSummary).map(([accountId, summary]) => (
+                        <div key={accountId} className="bg-gray-50 rounded-lg p-3 border border-gray-200">
+                          <div className="flex items-center justify-between mb-2">
+                            <h5 className="text-sm font-medium text-gray-900 truncate">
+                              {summary.accountName}
+                            </h5>
+                            <span className="text-xs text-gray-500">
+                              {summary.totalRecords} record{summary.totalRecords !== 1 ? 's' : ''}
+                            </span>
+                          </div>
+                          
+                          <div className="space-y-1">
+                            {/* Date Range */}
+                            <div className="flex justify-between text-xs">
+                              <span className="text-gray-500">Period:</span>
+                              <span className="text-gray-700">
+                                {summary.startDate && summary.endDate 
+                                  ? `${formatDate(summary.startDate)} - ${formatDate(summary.endDate)}`
+                                  : summary.startDate 
+                                  ? `From ${formatDate(summary.startDate)}`
+                                  : 'No records'
+                                }
+                              </span>
+                            </div>
+                            
+                            {/* Total P&L */}
+                            <div className="flex justify-between text-xs">
+                              <span className="text-gray-500">Total P&L:</span>
+                              <span className={`font-medium ${
+                                summary.totalPnL >= 0 ? 'text-green-600' : 'text-red-600'
+                              }`}>
+                                {summary.totalPnL >= 0 ? '+' : ''}{formatCurrency(summary.totalPnL)}
+                              </span>
+                            </div>
+                            
+                            {/* Breakdown */}
+                            <div className="pt-2 border-t border-gray-200">
+                              <div className="flex justify-between text-xs mb-1">
+                                <span className="text-gray-500">Profitable:</span>
+                                <span className="text-green-600">{summary.positiveRecords}</span>
+                              </div>
+                              <div className="flex justify-between text-xs">
+                                <span className="text-gray-500">Loss-making:</span>
+                                <span className="text-red-600">{summary.negativeRecords}</span>
+                              </div>
+                            </div>
+                          </div>
+                        </div>
+                      ))}
+                      
+                      {/* TOTAL Card */}
+                      {(() => {
+                        const totalSummary = Object.values(pnlSummary).reduce((acc, summary) => ({
+                          totalPnL: acc.totalPnL + summary.totalPnL,
+                          totalRecords: acc.totalRecords + summary.totalRecords,
+                          positiveRecords: acc.positiveRecords + summary.positiveRecords,
+                          negativeRecords: acc.negativeRecords + summary.negativeRecords,
+                          startDate: acc.startDate ? (summary.startDate && summary.startDate < acc.startDate ? summary.startDate : acc.startDate) : summary.startDate,
+                          endDate: acc.endDate ? (summary.endDate && summary.endDate > acc.endDate ? summary.endDate : acc.endDate) : summary.endDate,
+                        }), {
+                          totalPnL: 0,
+                          totalRecords: 0,
+                          positiveRecords: 0,
+                          negativeRecords: 0,
+                          startDate: null as string | null,
+                          endDate: null as string | null,
+                        });
+
+                        return (
+                          <div className="bg-blue-50 rounded-lg p-3 border-2 border-blue-200">
+                            <div className="flex items-center justify-between mb-2">
+                              <h5 className="text-sm font-bold text-blue-900 truncate">
+                                TOTAL
+                              </h5>
+                              <span className="text-xs text-blue-600 font-medium">
+                                {totalSummary.totalRecords} record{totalSummary.totalRecords !== 1 ? 's' : ''}
+                              </span>
+                            </div>
+                            
+                            <div className="space-y-1">
+                              {/* Date Range */}
+                              <div className="flex justify-between text-xs">
+                                <span className="text-blue-600 font-medium">Period:</span>
+                                <span className="text-blue-800 font-medium">
+                                  {totalSummary.startDate && totalSummary.endDate 
+                                    ? `${formatDate(totalSummary.startDate)} - ${formatDate(totalSummary.endDate)}`
+                                    : totalSummary.startDate 
+                                    ? `From ${formatDate(totalSummary.startDate)}`
+                                    : 'No records'
+                                  }
+                                </span>
+                              </div>
+                              
+                              {/* Total P&L */}
+                              <div className="flex justify-between text-xs">
+                                <span className="text-blue-600 font-medium">Total P&L:</span>
+                                <span className={`font-bold ${
+                                  totalSummary.totalPnL >= 0 ? 'text-green-600' : 'text-red-600'
+                                }`}>
+                                  {totalSummary.totalPnL >= 0 ? '+' : ''}{formatCurrency(totalSummary.totalPnL)}
+                                </span>
+                              </div>
+                              
+                              {/* Breakdown */}
+                              <div className="pt-2 border-t border-blue-200">
+                                <div className="flex justify-between text-xs mb-1">
+                                  <span className="text-blue-600 font-medium">Profitable:</span>
+                                  <span className="text-green-600 font-medium">{totalSummary.positiveRecords}</span>
+                                </div>
+                                <div className="flex justify-between text-xs">
+                                  <span className="text-blue-600 font-medium">Loss-making:</span>
+                                  <span className="text-red-600 font-medium">{totalSummary.negativeRecords}</span>
+                                </div>
+                              </div>
+                            </div>
+                          </div>
+                        );
+                      })()}
                     </div>
-                    <p className="mt-2 text-sm text-gray-600">
-                      Upload P&L or Dividend CSV files. The system will automatically detect the file type.
-                    </p>
                   </div>
-                </div>
+                )}
 
                 {/* P&L Records Table */}
                 {filteredRecords.length > 0 ? (
@@ -2416,7 +2542,7 @@ const PnL: React.FC = () => {
         <div className="mb-6">
           <div className="flex items-center justify-between">
             <div>
-              <h1 className="text-2xl font-bold text-gray-900">Profit & Loss</h1>
+              <h1 className="text-2xl font-bold text-gray-900">Profit & Loss Transactions</h1>
               <p className="text-gray-600">
                 {familyView 
                   ? 'Select a family to view aggregated P&L details' 
