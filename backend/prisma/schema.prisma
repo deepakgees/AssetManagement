@@ -8,29 +8,29 @@ datasource db {
 }
 
 model Account {
-  id              Int                 @id @default(autoincrement())
-  name            String
-  apiKey          String?
-  lastSync        DateTime?
-  createdAt       DateTime            @default(now())
-  updatedAt       DateTime            @updatedAt
-  userId          String?
-  password        String?
-  apiSecret       String?
-  family          String?
-  accessToken     String?
-  refreshToken    String?
-  description     String?
-  isActive        Boolean             @default(true)
-  requestToken    String?
-  totpSecret      String?
-  dividendRecords DividendRecord[]
-  holdings        Holding[]
-  margins         Margin[]
-  pnlRecords      PnLRecord[]
-  snapshots       PortfolioSnapshot[]
-  positions       Position[]
+  id               Int                 @id @default(autoincrement())
+  name             String
+  apiKey           String?
+  lastSync         DateTime?
+  createdAt        DateTime            @default(now())
+  updatedAt        DateTime            @updatedAt
+  userId           String?
+  password         String?
+  apiSecret        String?
+  family           String?
+  accessToken      String?
+  refreshToken     String?
+  description      String?
+  isActive         Boolean             @default(true)
+  requestToken     String?
+  totpSecret       String?
+  dividendRecords  DividendRecord[]
   fundTransactions FundTransaction[]
+  holdings         Holding[]
+  margins          Margin[]
+  pnlRecords       PnLRecord[]
+  snapshots        PortfolioSnapshot[]
+  positions        Position[]
 
   @@map("accounts")
 }
@@ -125,7 +125,6 @@ model Margin {
 
 model PnLRecord {
   id                         Int       @id @default(autoincrement())
-  accountId                  Int
   instrumentType             String
   symbol                     String?
   isin                       String?
@@ -150,49 +149,49 @@ model PnLRecord {
   stt                        Float?
   createdAt                  DateTime  @default(now())
   updatedAt                  DateTime  @updatedAt
+  accountId                  Int
   account                    Account   @relation(fields: [accountId], references: [id], onDelete: Cascade)
 
   @@map("pnl_records")
 }
 
 model DividendRecord {
-  id                Int            @id @default(autoincrement())
-  accountId         Int
+  id                Int       @id @default(autoincrement())
   symbol            String?
   isin              String?
   exDate            DateTime?
   quantity          Float?
   dividendPerShare  Float?
   netDividendAmount Float?
-  createdAt         DateTime       @default(now())
-  updatedAt         DateTime       @updatedAt
-  account           Account        @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
+  accountId         Int
+  account           Account   @relation(fields: [accountId], references: [id], onDelete: Cascade)
 
   @@unique([accountId, symbol, isin, exDate, quantity, dividendPerShare, netDividendAmount], name: "unique_dividend_record")
   @@map("dividend_records")
 }
 
 model SymbolAndMargin {
-  id            Int      @id @default(autoincrement())
-  symbolPrefix  String
-  margin        Float
-  createdAt     DateTime @default(now())
-  updatedAt     DateTime @updatedAt
+  id           Int      @id @default(autoincrement())
+  symbolPrefix String   @unique
+  margin       Float
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
 
-  @@unique([symbolPrefix], name: "unique_symbol_prefix")
   @@map("symbol_and_margins")
 }
 
 model FundTransaction {
-  id          Int      @id @default(autoincrement())
-  accountId   Int
+  id              Int      @id @default(autoincrement())
+  accountId       Int
   transactionDate DateTime
-  amount      Float
-  type        String   // 'ADDITION' or 'WITHDRAWAL'
-  description String?
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
-  account     Account  @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  amount          Float
+  type            String
+  description     String?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+  account         Account  @relation(fields: [accountId], references: [id], onDelete: Cascade)
 
   @@map("fund_transactions")
 }
