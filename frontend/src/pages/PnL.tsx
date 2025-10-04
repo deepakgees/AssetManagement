@@ -1,8 +1,10 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { pnlService } from '../services/pnlService';
 import { dividendService } from '../services/dividendService';
 import { getAccounts } from '../services/accountsService';
+import { FundTransactionService } from '../services/fundTransactionService';
+import { FundTransaction, CreateFundTransactionData } from '../types/fundTransaction';
 import Layout from '../components/Layout';
 import PnLChart from '../components/PnLChart';
 import {
@@ -16,17 +18,36 @@ import {
   ExclamationTriangleIcon,
   UserGroupIcon,
   UserIcon,
+  ChevronLeftIcon,
+  ChevronRightIcon,
+  ChartBarIcon,
+  BanknotesIcon,
+  ArrowTrendingUpIcon,
 } from '@heroicons/react/24/outline';
 
 const PnL: React.FC = () => {
   const [selectedAccount, setSelectedAccount] = useState<number | null>(null);
   const [selectedFamilyName, setSelectedFamilyName] = useState<string | null>(null);
   const [familyView, setFamilyView] = useState<boolean>(true); // Default to family view
+  const [activeTab, setActiveTab] = useState<'overview' | 'profit-loss' | 'fund-transactions'>('overview');
   const [showUploadModal, setShowUploadModal] = useState(false);
   const [showDuplicateModal, setShowDuplicateModal] = useState(false);
+  const [showFundModal, setShowFundModal] = useState(false);
+  const [showCSVUploadModal, setShowCSVUploadModal] = useState(false);
   const [uploadFile, setUploadFile] = useState<File | null>(null);
+  const [csvUploadFile, setCsvUploadFile] = useState<File | null>(null);
+  const [csvUploadAccountId, setCsvUploadAccountId] = useState<number | null>(null);
   const [uploading, setUploading] = useState(false);
+  const [csvUploading, setCsvUploading] = useState(false);
   const [checkingDuplicates, setCheckingDuplicates] = useState(false);
+  const [csvCheckingDuplicates, setCsvCheckingDuplicates] = useState(false);
+  const [showCSVDuplicateModal, setShowCSVDuplicateModal] = useState(false);
+  const [csvDuplicateInfo, setCsvDuplicateInfo] = useState<{
+    totalRecords: number;
+    duplicateCount: number;
+    duplicates: any[];
+    uniqueRecords: any[];
+  } | null>(null);
   const [refreshing, setRefreshing] = useState(false);
   const [duplicateInfo, setDuplicateInfo] = useState<{
     totalRecords: number;
@@ -40,6 +61,44 @@ const PnL: React.FC = () => {
   const [instrumentTypeFilter, setInstrumentTypeFilter] = useState<string>('');
   const [financialYearFilter, setFinancialYearFilter] = useState<string>('');
   const [quarterFilter, setQuarterFilter] = useState<string>('');
+  
+  // Fund transaction time range filter
+  const [fundTransactionStartDate, setFundTransactionStartDate] = useState<string>('');
+  const [fundTransactionEndDate, setFundTransactionEndDate] = useState<string>('');
+  
+  // Pagination states
+  const [currentPage, setCurrentPage] = useState<number>(1);
+  const [itemsPerPage, setItemsPerPage] = useState<number>(10);
+  
+  // Fund transactions pagination states
+  const [fundCurrentPage, setFundCurrentPage] = useState<number>(1);
+  const [fundItemsPerPage, setFundItemsPerPage] = useState<number>(10);
+  
+  // Fund transactions sorting states
+  const [fundSortField, setFundSortField] = useState<keyof FundTransaction | null>(null);
+  const [fundSortDirection, setFundSortDirection] = useState<'asc' | 'desc'>('asc');
+  
+  // Fund transaction summary states
+  const [fundTransactionSummary, setFundTransactionSummary] = useState<{
+    [accountId: number]: {
+      accountName: string;
+      startDate: string | null;
+      endDate: string | null;
+      netAmount: number;
+      totalAdditions: number;
+      totalWithdrawals: number;
+      transactionCount: number;
+    };
+  }>({});
+  
+  // Fund transaction states
+  const [fundTransactionForm, setFundTransactionForm] = useState<CreateFundTransactionData>({
+    accountId: 0,
+    transactionDate: new Date().toISOString().split('T')[0],
+    amount: 0,
+    type: 'ADDITION',
+    description: '',
+  });
 
   const queryClient = useQueryClient();
 
@@ -167,6 +226,20 @@ const PnL: React.FC = () => {
     enabled: !!selectedAccount || (familyView && !!selectedFamilyName && !!accounts),
   });
 
+  // Fetch fund transactions for selected account or family
+  const { data: fundTransactions } = useQuery({
+    queryKey: ['fund-transactions', selectedAccount, selectedFamilyName, familyView],
+    queryFn: async () => {
+      if (selectedAccount) {
+        return await FundTransactionService.getAccountTransactions(selectedAccount);
+      } else if (familyView && selectedFamilyName) {
+        return await FundTransactionService.getFamilyTransactions(selectedFamilyName);
+      }
+      return [];
+    },
+    enabled: !!selectedAccount || (familyView && !!selectedFamilyName),
+  });
+
   // Upload mutations
   const pnlUploadMutation = useMutation({
     mutationFn: (file: File) => pnlService.uploadFile(file, selectedAccount!),
@@ -193,6 +266,59 @@ const PnL: React.FC = () => {
     },
     onError: () => {
       setUploading(false);
+    },
+  });
+
+  const fundTransactionMutation = useMutation({
+    mutationFn: (data: CreateFundTransactionData) => FundTransactionService.createTransaction(data),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['fund-transactions'] });
+      queryClient.invalidateQueries({ queryKey: ['xirr-calculation'] });
+      setShowFundModal(false);
+      setFundTransactionForm({
+        accountId: selectedAccount || 0,
+        transactionDate: new Date().toISOString().split('T')[0],
+        amount: 0,
+        type: 'ADDITION',
+        description: '',
+      });
+    },
+  });
+
+  const csvUploadMutation = useMutation({
+    mutationFn: ({ accountId, file }: { accountId: number; file: File }) => 
+      FundTransactionService.uploadCSV(accountId, file),
+    onSuccess: (data) => {
+      queryClient.invalidateQueries({ queryKey: ['fund-transactions'] });
+      queryClient.invalidateQueries({ queryKey: ['xirr-calculation'] });
+      setShowCSVUploadModal(false);
+      setCsvUploadFile(null);
+      setCsvUploadAccountId(null);
+      setCsvUploading(false);
+      alert(`Successfully uploaded ${data.transactionsCreated} fund transactions!`);
+    },
+    onError: (error) => {
+      setCsvUploading(false);
+      alert(`Error uploading CSV: ${error.message}`);
+    },
+  });
+
+  const csvUploadUniqueMutation = useMutation({
+    mutationFn: ({ accountId, file }: { accountId: number; file: File }) => 
+      FundTransactionService.uploadCSVUnique(accountId, file),
+    onSuccess: (data) => {
+      queryClient.invalidateQueries({ queryKey: ['fund-transactions'] });
+      queryClient.invalidateQueries({ queryKey: ['xirr-calculation'] });
+      setShowCSVUploadModal(false);
+      setCsvUploadFile(null);
+      setCsvUploadAccountId(null);
+      setCsvUploading(false);
+      setCsvDuplicateInfo(null);
+      alert(`Successfully uploaded ${data.transactionsCreated} unique fund transactions!`);
+    },
+    onError: (error) => {
+      setCsvUploading(false);
+      alert(`Error uploading CSV: ${error.message}`);
     },
   });
 
@@ -302,10 +428,11 @@ const PnL: React.FC = () => {
 
   const handleAccountClick = (accountId: number) => {
     setSelectedAccount(accountId);
-    // Reset filters
+    // Reset filters and pagination
     setInstrumentTypeFilter('');
     setFinancialYearFilter('');
     setQuarterFilter('');
+    setCurrentPage(1);
   };
 
   const handleBackToAccounts = () => {
@@ -434,8 +561,268 @@ const PnL: React.FC = () => {
 
   // Calculate totals for filtered records
   const totalProfit = filteredRecords.reduce((sum, record) => sum + (record.profit || 0), 0);
-  const totalBuyValue = filteredRecords.reduce((sum, record) => sum + (record.buyValue || 0), 0);
-  const totalSellValue = filteredRecords.reduce((sum, record) => sum + (record.sellValue || 0), 0);
+
+  // Filter fund transactions by date range
+  const filteredFundTransactions = (() => {
+    if (!fundTransactions) return [];
+    
+    let filtered = [...fundTransactions];
+    
+    // Apply date range filter
+    if (fundTransactionStartDate || fundTransactionEndDate) {
+      filtered = filtered.filter(transaction => {
+        const transactionDate = new Date(transaction.transactionDate);
+        const startDate = fundTransactionStartDate ? new Date(fundTransactionStartDate) : null;
+        const endDate = fundTransactionEndDate ? new Date(fundTransactionEndDate) : null;
+        
+        if (startDate && transactionDate < startDate) return false;
+        if (endDate && transactionDate > endDate) return false;
+        
+        return true;
+      });
+    }
+    
+    return filtered;
+  })();
+
+  // Fund transactions sorting logic
+  const sortedFundTransactions = (() => {
+    if (!filteredFundTransactions || !fundSortField) return filteredFundTransactions || [];
+    
+    return [...filteredFundTransactions].sort((a, b) => {
+      let aValue: any;
+      let bValue: any;
+      
+      if (fundSortField === 'account') {
+        aValue = a.account?.name || `Account ${a.accountId}`;
+        bValue = b.account?.name || `Account ${b.accountId}`;
+      } else {
+        aValue = a[fundSortField];
+        bValue = b[fundSortField];
+      }
+      
+      // Handle different data types
+      if (typeof aValue === 'string' && typeof bValue === 'string') {
+        return fundSortDirection === 'asc' 
+          ? aValue.localeCompare(bValue)
+          : bValue.localeCompare(aValue);
+      }
+      
+      if (typeof aValue === 'number' && typeof bValue === 'number') {
+        return fundSortDirection === 'asc' 
+          ? aValue - bValue
+          : bValue - aValue;
+      }
+      
+      if (aValue instanceof Date && bValue instanceof Date) {
+        return fundSortDirection === 'asc' 
+          ? aValue.getTime() - bValue.getTime()
+          : bValue.getTime() - aValue.getTime();
+      }
+      
+      // Handle string dates
+      if (typeof aValue === 'string' && typeof bValue === 'string') {
+        const aDate = new Date(aValue);
+        const bDate = new Date(bValue);
+        if (!isNaN(aDate.getTime()) && !isNaN(bDate.getTime())) {
+          return fundSortDirection === 'asc' 
+            ? aDate.getTime() - bDate.getTime()
+            : bDate.getTime() - aDate.getTime();
+        }
+      }
+      
+      return 0;
+    });
+  })();
+
+  // Fund transactions pagination logic
+  const fundTotalPages = sortedFundTransactions ? Math.ceil(sortedFundTransactions.length / fundItemsPerPage) : 0;
+  const fundStartIndex = (fundCurrentPage - 1) * fundItemsPerPage;
+  const fundEndIndex = fundStartIndex + fundItemsPerPage;
+  const paginatedFundTransactions = sortedFundTransactions ? sortedFundTransactions.slice(fundStartIndex, fundEndIndex) : [];
+
+  // Calculate fund transaction summary
+  useEffect(() => {
+    if (!filteredFundTransactions || filteredFundTransactions.length === 0) {
+      setFundTransactionSummary({});
+      return;
+    }
+
+    const summary: typeof fundTransactionSummary = {};
+    
+    // Group transactions by account
+    const transactionsByAccount = filteredFundTransactions.reduce((acc, transaction) => {
+      const accountId = transaction.accountId;
+      if (!acc[accountId]) {
+        acc[accountId] = [];
+      }
+      acc[accountId].push(transaction);
+      return acc;
+    }, {} as { [accountId: number]: FundTransaction[] });
+
+    // Calculate summary for each account
+    Object.entries(transactionsByAccount).forEach(([accountIdStr, transactions]) => {
+      const accountId = parseInt(accountIdStr);
+      const accountName = transactions[0]?.account?.name || `Account ${accountId}`;
+      
+      // Sort transactions by date to get start and end dates
+      const sortedTransactions = [...transactions].sort((a, b) => 
+        new Date(a.transactionDate).getTime() - new Date(b.transactionDate).getTime()
+      );
+      
+      const startDate = sortedTransactions[0]?.transactionDate || null;
+      const endDate = sortedTransactions[sortedTransactions.length - 1]?.transactionDate || null;
+      
+      // Calculate amounts
+      const totalAdditions = transactions
+        .filter(t => t.type === 'ADDITION')
+        .reduce((sum, t) => sum + t.amount, 0);
+      
+      const totalWithdrawals = transactions
+        .filter(t => t.type === 'WITHDRAWAL')
+        .reduce((sum, t) => sum + t.amount, 0);
+      
+      const netAmount = totalAdditions - totalWithdrawals;
+      
+      summary[accountId] = {
+        accountName,
+        startDate,
+        endDate,
+        netAmount,
+        totalAdditions,
+        totalWithdrawals,
+        transactionCount: transactions.length,
+      };
+    });
+    
+    setFundTransactionSummary(summary);
+  }, [filteredFundTransactions]);
+
+
+  // Pagination logic
+  const totalPages = Math.ceil(filteredRecords.length / itemsPerPage);
+  const startIndex = (currentPage - 1) * itemsPerPage;
+  const endIndex = startIndex + itemsPerPage;
+  const paginatedRecords = filteredRecords.slice(startIndex, endIndex);
+
+  // Reset to first page when filters change
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [instrumentTypeFilter, financialYearFilter, quarterFilter]);
+
+  // Reset fund transactions pagination when account or family changes
+  useEffect(() => {
+    setFundCurrentPage(1);
+  }, [selectedAccount, selectedFamilyName, familyView]);
+
+  // Pagination handlers
+  const handlePageChange = (page: number) => {
+    setCurrentPage(page);
+  };
+
+  const handleItemsPerPageChange = (newItemsPerPage: number) => {
+    setItemsPerPage(newItemsPerPage);
+    setCurrentPage(1); // Reset to first page when changing items per page
+  };
+
+  // Fund transactions pagination handlers
+  const handleFundPageChange = (pageNumber: number) => {
+    setFundCurrentPage(pageNumber);
+  };
+
+  const handleFundItemsPerPageChange = (newItemsPerPage: number) => {
+    setFundItemsPerPage(newItemsPerPage);
+    setFundCurrentPage(1); // Reset to first page when changing items per page
+  };
+
+  // Fund transactions sorting handler
+  const handleFundSort = (field: keyof FundTransaction | 'account') => {
+    if (fundSortField === field) {
+      setFundSortDirection(fundSortDirection === 'asc' ? 'desc' : 'asc');
+    } else {
+      setFundSortField(field as keyof FundTransaction);
+      setFundSortDirection('asc');
+    }
+    setFundCurrentPage(1); // Reset to first page when sorting
+  };
+
+  // Generate smart page numbers for fund transactions pagination
+  const getFundPageNumbers = () => {
+    const totalPages = fundTotalPages;
+    const currentPage = fundCurrentPage;
+    const maxVisiblePages = 5;
+    
+    if (totalPages <= maxVisiblePages) {
+      return Array.from({ length: totalPages }, (_, i) => i + 1);
+    }
+    
+    const half = Math.floor(maxVisiblePages / 2);
+    let start = Math.max(1, currentPage - half);
+    let end = Math.min(totalPages, start + maxVisiblePages - 1);
+    
+    if (end - start + 1 < maxVisiblePages) {
+      start = Math.max(1, end - maxVisiblePages + 1);
+    }
+    
+    return Array.from({ length: end - start + 1 }, (_, i) => start + i);
+  };
+
+  const handleFundTransactionSubmit = () => {
+    if (!fundTransactionForm.accountId || !fundTransactionForm.amount || !fundTransactionForm.transactionDate) {
+      alert('Please fill in all required fields');
+      return;
+    }
+
+    fundTransactionMutation.mutate(fundTransactionForm);
+  };
+
+  const handleCSVUpload = async () => {
+    const accountId = familyView ? csvUploadAccountId : selectedAccount;
+    
+    if (!csvUploadFile || !accountId) {
+      alert('Please select a CSV file and account');
+      return;
+    }
+
+    setCsvCheckingDuplicates(true);
+    try {
+      const duplicateCheckResult = await FundTransactionService.checkDuplicates(accountId, csvUploadFile);
+      
+      if (duplicateCheckResult.duplicateCount > 0) {
+        setCsvDuplicateInfo(duplicateCheckResult);
+        setShowCSVDuplicateModal(true);
+      } else {
+        // No duplicates, proceed with upload
+        setCsvUploading(true);
+        csvUploadMutation.mutate({
+          accountId: accountId,
+          file: csvUploadFile,
+        });
+      }
+    } catch (error) {
+      alert(`Error checking duplicates: ${error instanceof Error ? error.message : 'Unknown error'}`);
+    } finally {
+      setCsvCheckingDuplicates(false);
+    }
+  };
+
+  // Handle CSV duplicate confirmation
+  const handleCSVDuplicateConfirm = () => {
+    const accountId = familyView ? csvUploadAccountId : selectedAccount;
+    if (!csvUploadFile || !accountId) return;
+
+    setShowCSVDuplicateModal(false);
+    setCsvUploading(true);
+    csvUploadUniqueMutation.mutate({
+      accountId: accountId,
+      file: csvUploadFile,
+    });
+  };
+
+  const handleCSVDuplicateSkip = () => {
+    setShowCSVDuplicateModal(false);
+    setCsvDuplicateInfo(null);
+  };
 
   // Calculate family account breakdown when in family view
   const getFamilyAccountBreakdown = () => {
@@ -571,78 +958,55 @@ const PnL: React.FC = () => {
             </div>
           </div>
 
-                     {/* Filters Section */}
-           <div className="bg-white shadow sm:rounded-lg mb-6">
-             <div className="px-4 py-5 sm:p-6">
-               <div className="flex items-center justify-between mb-4">
-                 <div className="flex items-center">
-                   <FunnelIcon className="h-5 w-5 text-gray-400 mr-2" />
-                   <h3 className="text-lg font-medium text-gray-900">Filters</h3>
-                 </div>
-                 <button
-                   onClick={handleRefresh}
-                   disabled={refreshing}
-                   className="inline-flex items-center px-3 py-2 border border-gray-300 shadow-sm text-sm leading-4 font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500 disabled:opacity-50 disabled:cursor-not-allowed"
-                   title="Refresh data based on current filters"
-                 >
-                   <ArrowPathIcon className={`h-4 w-4 mr-1 ${refreshing ? 'animate-spin' : ''}`} />
-                   {refreshing ? 'Refreshing...' : 'Refresh'}
-                 </button>
-               </div>
-                               <div className="flex items-end gap-4">
-                  <div className="flex-1 max-w-48">
-                    <label className="block text-sm font-medium text-gray-700 mb-1">
-                      Instrument Type
-                    </label>
-                    <select
-                      value={instrumentTypeFilter}
-                      onChange={(e) => setInstrumentTypeFilter(e.target.value)}
-                      className="block w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 sm:text-sm"
-                    >
-                      <option value="">All Types</option>
-                      {uniqueInstrumentTypes.map((type) => (
-                        <option key={type} value={type}>
-                          {type}
-                        </option>
-                      ))}
-                    </select>
-                  </div>
-                                   <div className="flex-1 max-w-40">
-                    <label className="block text-sm font-medium text-gray-700 mb-1">
-                      Financial Year
-                    </label>
-                    <select
-                      value={financialYearFilter}
-                      onChange={(e) => setFinancialYearFilter(e.target.value)}
-                      className="block w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 sm:text-sm"
-                    >
-                      <option value="">All Years</option>
-                      {getFinancialYears().map((year) => (
-                        <option key={year} value={year}>
-                          {year}
-                        </option>
-                      ))}
-                    </select>
-                  </div>
-                  <div className="flex-1 max-w-36">
-                    <label className="block text-sm font-medium text-gray-700 mb-1">
-                      Quarter
-                    </label>
-                    <select
-                      value={quarterFilter}
-                      onChange={(e) => setQuarterFilter(e.target.value)}
-                      className="block w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 sm:text-sm"
-                    >
-                      <option value="">All Quarters</option>
-                      {getQuarters().map((quarter) => (
-                        <option key={quarter.value} value={quarter.value}>
-                          {quarter.label}
-                        </option>
-                      ))}
-                    </select>
-                  </div>
-                                   {/* Summary Card */}
-                  <div className="bg-white overflow-hidden shadow rounded-lg min-w-64">
+          {/* Tab Navigation */}
+          <div className="bg-white shadow sm:rounded-lg mb-6">
+            <div className="border-b border-gray-200">
+              <nav className="-mb-px flex space-x-8 px-6" aria-label="Tabs">
+                <button
+                  onClick={() => setActiveTab('overview')}
+                  className={`flex items-center py-4 px-1 border-b-2 font-medium text-sm ${
+                    activeTab === 'overview'
+                      ? 'border-indigo-500 text-indigo-600'
+                      : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
+                  }`}
+                >
+                  <ChartBarIcon className="h-5 w-5 mr-2" />
+                  Overview
+                </button>
+                <button
+                  onClick={() => setActiveTab('profit-loss')}
+                  className={`flex items-center py-4 px-1 border-b-2 font-medium text-sm ${
+                    activeTab === 'profit-loss'
+                      ? 'border-indigo-500 text-indigo-600'
+                      : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
+                  }`}
+                >
+                  <ArrowTrendingUpIcon className="h-5 w-5 mr-2" />
+                  Profit & Loss
+                </button>
+                <button
+                  onClick={() => setActiveTab('fund-transactions')}
+                  className={`flex items-center py-4 px-1 border-b-2 font-medium text-sm ${
+                    activeTab === 'fund-transactions'
+                      ? 'border-indigo-500 text-indigo-600'
+                      : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
+                  }`}
+                >
+                  <BanknotesIcon className="h-5 w-5 mr-2" />
+                  Fund Transactions
+                </button>
+              </nav>
+            </div>
+          </div>
+
+          {/* Tab Content */}
+          <div className="space-y-6">
+            {/* Overview Tab */}
+            {activeTab === 'overview' && (
+              <div className="space-y-6">
+                {/* Summary Cards */}
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
+                  <div className="bg-white overflow-hidden shadow rounded-lg">
                     <div className="p-5">
                       <div className="flex items-center">
                         <div className="flex-shrink-0">
@@ -656,150 +1020,741 @@ const PnL: React.FC = () => {
                                 {formatCurrency(totalProfit)}
                               </span>
                             </dd>
-                            {familyAccountBreakdown && familyAccountBreakdown.length > 0 && (
-                              <dd className="text-xs text-gray-500 mt-1">
-                                <span className="font-medium">Breakdown:</span>
-                                {familyAccountBreakdown.map((item, index) => (
-                                  <span key={item.account.id}>
-                                    {index > 0 ? ', ' : ' '}
-                                    {item.account.name}: {formatCurrency(item.profit)}
-                                  </span>
-                                ))}
-                              </dd>
-                            )}
                           </dl>
                         </div>
                       </div>
                     </div>
                   </div>
-               </div>
-             </div>
-           </div>
 
-           {/* P&L Chart */}
-           {(selectedAccount || selectedFamilyName) && filteredRecords.length > 0 && (
-             <div className="mb-6">
-               <PnLChart records={filteredRecords} />
-             </div>
-           )}
+                  <div className="bg-white overflow-hidden shadow rounded-lg">
+                    <div className="p-5">
+                      <div className="flex items-center">
+                        <div className="flex-shrink-0">
+                          <ArrowTrendingUpIcon className="h-6 w-6 text-gray-400" />
+                        </div>
+                        <div className="ml-5 w-0 flex-1">
+                          <dl>
+                            <dt className="text-sm font-medium text-gray-500 truncate">Total Records</dt>
+                            <dd className="text-lg font-medium text-gray-900">
+                              {filteredRecords.length}
+                            </dd>
+                          </dl>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
 
-          {/* Records Table */}
-          {filteredRecords.length > 0 ? (
-            <div className="bg-white shadow overflow-hidden sm:rounded-md">
-              <div className="px-4 py-5 sm:p-6">
-                <h3 className="text-lg font-medium text-gray-900 mb-4">
-                  {instrumentTypeFilter === 'Dividend' ? 'Dividend' : 'P&L'} Records ({filteredRecords.length} records)
-                </h3>
-                <div className="overflow-x-auto">
-                  <table className="min-w-full divide-y divide-gray-200">
-                    <thead className="bg-gray-50">
-                      <tr>
-                        <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                          Symbol
-                        </th>
-                        <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                          Instrument Type
-                        </th>
-                        <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                          {instrumentTypeFilter === 'Dividend' ? 'Ex-Date' : 'Entry Date'}
-                        </th>
-                        {instrumentTypeFilter !== 'Dividend' && (
-                          <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                            Exit Date
-                          </th>
-                        )}
-                        <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                          Quantity
-                        </th>
-                        {instrumentTypeFilter !== 'Dividend' && (
-                          <>
-                            <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                              Buy Value
-                            </th>
-                            <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                              Sell Value
-                            </th>
-                          </>
-                        )}
-                        {instrumentTypeFilter === 'Dividend' && (
-                          <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                            Dividend Per Share
-                          </th>
-                        )}
-                        <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                          {instrumentTypeFilter === 'Dividend' ? 'Net Dividend Amount' : 'Profit/Loss'}
-                        </th>
-                        {instrumentTypeFilter !== 'Dividend' && (
-                          <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                            Brokerage
-                          </th>
-                        )}
-                      </tr>
-                    </thead>
-                    <tbody className="bg-white divide-y divide-gray-200">
-                      {filteredRecords.map((record) => (
-                        <tr key={`${record.recordType}-${record.id}`} className="hover:bg-gray-50">
-                          <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">
-                            {record.symbol || '-'}
-                          </td>
-                          <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
-                            {record.instrumentType}
-                          </td>
-                          <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
-                            {record.entryDate ? formatDate(record.entryDate) : '-'}
-                          </td>
-                          {instrumentTypeFilter !== 'Dividend' && (
-                            <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
-                              {record.exitDate ? formatDate(record.exitDate) : '-'}
-                            </td>
-                          )}
-                          <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
-                            {record.quantity || '-'}
-                          </td>
-                          {instrumentTypeFilter !== 'Dividend' && (
-                            <>
-                              <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
-                                {formatCurrency(record.buyValue)}
-                              </td>
-                              <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
-                                {formatCurrency(record.sellValue)}
-                              </td>
-                            </>
-                          )}
-                          {instrumentTypeFilter === 'Dividend' && (
-                            <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
-                              {formatCurrency(record.dividendPerShare || 0)}
-                            </td>
-                          )}
-                          <td className="px-6 py-4 whitespace-nowrap text-sm font-medium">
-                            <span className={record.profit && record.profit >= 0 ? 'text-green-600' : 'text-red-600'}>
-                              {formatCurrency(record.profit)}
-                            </span>
-                          </td>
-                          {instrumentTypeFilter !== 'Dividend' && (
-                            <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
-                              {formatCurrency(record.brokerage)}
-                            </td>
-                          )}
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
+                  <div className="bg-white overflow-hidden shadow rounded-lg">
+                    <div className="p-5">
+                      <div className="flex items-center">
+                        <div className="flex-shrink-0">
+                          <UserGroupIcon className="h-6 w-6 text-gray-400" />
+                        </div>
+                        <div className="ml-5 w-0 flex-1">
+                          <dl>
+                            <dt className="text-sm font-medium text-gray-500 truncate">Family/Account</dt>
+                            <dd className="text-lg font-medium text-gray-900">
+                              {familyView ? (selectedFamilyName || 'All Families') : (selectedAccount ? `Account ${selectedAccount}` : 'All Accounts')}
+                            </dd>
+                          </dl>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="bg-white overflow-hidden shadow rounded-lg">
+                    <div className="p-5">
+                      <div className="flex items-center">
+                        <div className="flex-shrink-0">
+                          <ArrowTrendingUpIcon className="h-6 w-6 text-gray-400" />
+                        </div>
+                        <div className="ml-5 w-0 flex-1">
+                          <dl>
+                            <dt className="text-sm font-medium text-gray-500 truncate">Total Records</dt>
+                            <dd className="text-lg font-medium text-gray-900">
+                              {filteredRecords.length}
+                            </dd>
+                          </dl>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Family Account Breakdown */}
+                {familyAccountBreakdown && familyAccountBreakdown.length > 0 && (
+                  <div className="bg-white shadow overflow-hidden sm:rounded-lg">
+                    <div className="px-4 py-5 sm:p-6">
+                      <h3 className="text-lg font-medium text-gray-900 mb-4">Family Account Breakdown</h3>
+                      <div className="overflow-x-auto">
+                        <table className="min-w-full divide-y divide-gray-200">
+                          <thead className="bg-gray-50">
+                            <tr>
+                              <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                                Account
+                              </th>
+                              <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                                Family
+                              </th>
+                              <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                                Profit/Loss
+                              </th>
+                              <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                                Records
+                              </th>
+                            </tr>
+                          </thead>
+                          <tbody className="bg-white divide-y divide-gray-200">
+                            {familyAccountBreakdown.map((item) => (
+                              <tr key={item.account.id} className="hover:bg-gray-50">
+                                <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">
+                                  {item.account.name}
+                                </td>
+                                <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                                  {item.account.family || 'N/A'}
+                                </td>
+                                <td className="px-6 py-4 whitespace-nowrap text-sm">
+                                  <span className={item.profit >= 0 ? 'text-green-600' : 'text-red-600'}>
+                                    {formatCurrency(item.profit)}
+                                  </span>
+                                </td>
+                                <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                                  -
+                                </td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                {/* P&L Chart */}
+                {filteredRecords.length > 0 && (
+                  <div className="bg-white shadow overflow-hidden sm:rounded-lg">
+                    <div className="px-4 py-5 sm:p-6">
+                      <h3 className="text-lg font-medium text-gray-900 mb-4">P&L Chart</h3>
+                      <div className="h-96">
+                        <PnLChart records={filteredRecords} />
+                      </div>
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* Fund Transactions Tab */}
+            {activeTab === 'fund-transactions' && (
+              <div className="bg-white shadow sm:rounded-lg">
+                <div className="px-4 py-5 sm:p-6">
+                  <div className="flex items-center justify-between mb-4">
+                    <h3 className="text-lg font-medium text-gray-900">Fund Transactions</h3>
+                    <div className="flex space-x-2">
+                      <button
+                        onClick={() => setShowCSVUploadModal(true)}
+                        className="inline-flex items-center px-3 py-2 border border-gray-300 text-sm leading-4 font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500"
+                      >
+                        <CloudArrowUpIcon className="h-4 w-4 mr-1" />
+                        Upload CSV
+                      </button>
+                      <button
+                        onClick={() => setShowFundModal(true)}
+                        className="inline-flex items-center px-3 py-2 border border-transparent text-sm leading-4 font-medium rounded-md text-white bg-indigo-600 hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500"
+                      >
+                        <PlusIcon className="h-4 w-4 mr-1" />
+                        Add Fund Transaction
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* Time Range Filter */}
+                  <div className="mb-6 p-4 bg-gray-50 rounded-lg border border-gray-200">
+                    <div className="flex items-center justify-between mb-4">
+                      <h4 className="text-sm font-medium text-gray-900">Filter by Date Range</h4>
+                      <button
+                        onClick={() => {
+                          setFundTransactionStartDate('');
+                          setFundTransactionEndDate('');
+                        }}
+                        className="text-xs text-indigo-600 hover:text-indigo-800 font-medium"
+                      >
+                        Clear Filters
+                      </button>
+                    </div>
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                      <div>
+                        <label className="block text-xs font-medium text-gray-700 mb-1">
+                          Start Date
+                        </label>
+                        <input
+                          type="date"
+                          value={fundTransactionStartDate}
+                          onChange={(e) => setFundTransactionStartDate(e.target.value)}
+                          className="block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 text-sm"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-xs font-medium text-gray-700 mb-1">
+                          End Date
+                        </label>
+                        <input
+                          type="date"
+                          value={fundTransactionEndDate}
+                          onChange={(e) => setFundTransactionEndDate(e.target.value)}
+                          className="block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 text-sm"
+                        />
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Fund Transaction Summary */}
+                  {Object.keys(fundTransactionSummary).length > 0 && (
+                    <div className="mb-6">
+                      <h4 className="text-md font-medium text-gray-900 mb-4">Account Summary</h4>
+                      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                        {Object.entries(fundTransactionSummary).map(([accountId, summary]) => (
+                          <div key={accountId} className="bg-gray-50 rounded-lg p-4 border border-gray-200">
+                            <div className="flex items-center justify-between mb-3">
+                              <h5 className="text-sm font-medium text-gray-900 truncate">
+                                {summary.accountName}
+                              </h5>
+                              <span className="text-xs text-gray-500">
+                                {summary.transactionCount} transaction{summary.transactionCount !== 1 ? 's' : ''}
+                              </span>
+                            </div>
+                            
+                            <div className="space-y-2">
+                              {/* Date Range */}
+                              <div className="flex justify-between text-xs">
+                                <span className="text-gray-500">Period:</span>
+                                <span className="text-gray-700">
+                                  {summary.startDate && summary.endDate 
+                                    ? `${formatDate(summary.startDate)} - ${formatDate(summary.endDate)}`
+                                    : summary.startDate 
+                                    ? `From ${formatDate(summary.startDate)}`
+                                    : 'No transactions'
+                                  }
+                                </span>
+                              </div>
+                              
+                              {/* Net Amount */}
+                              <div className="flex justify-between text-xs">
+                                <span className="text-gray-500">Net Amount:</span>
+                                <span className={`font-medium ${
+                                  summary.netAmount >= 0 ? 'text-green-600' : 'text-red-600'
+                                }`}>
+                                  {summary.netAmount >= 0 ? '+' : ''}{formatCurrency(summary.netAmount)}
+                                </span>
+                              </div>
+                              
+                              {/* Breakdown */}
+                              <div className="pt-2 border-t border-gray-200">
+                                <div className="flex justify-between text-xs mb-1">
+                                  <span className="text-gray-500">Additions:</span>
+                                  <span className="text-green-600">+{formatCurrency(summary.totalAdditions)}</span>
+                                </div>
+                                <div className="flex justify-between text-xs">
+                                  <span className="text-gray-500">Withdrawals:</span>
+                                  <span className="text-red-600">-{formatCurrency(summary.totalWithdrawals)}</span>
+                                </div>
+                              </div>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Fund Transactions Table */}
+                  {fundTransactions && fundTransactions.length > 0 ? (
+                    <>
+                      {/* Fund Transactions Pagination Controls */}
+                      <div className="flex items-center justify-between mb-4">
+                        <div className="flex items-center space-x-2">
+                          <span className="text-sm text-gray-700">Show:</span>
+                          <select
+                            value={fundItemsPerPage}
+                            onChange={(e) => handleFundItemsPerPageChange(Number(e.target.value))}
+                            className="border border-gray-300 rounded-md px-2 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                          >
+                            <option value={5}>5</option>
+                            <option value={10}>10</option>
+                            <option value={25}>25</option>
+                            <option value={50}>50</option>
+                          </select>
+                        </div>
+
+                        <div className="flex items-center space-x-2">
+                          <span className="text-sm text-gray-700">
+                            Showing {fundStartIndex + 1} to {Math.min(fundEndIndex, sortedFundTransactions.length)} of {sortedFundTransactions.length}
+                          </span>
+                        </div>
+
+                        <div className="flex items-center">
+                          <button
+                            onClick={() => handleFundPageChange(fundCurrentPage - 1)}
+                            disabled={fundCurrentPage === 1}
+                            className="p-2 text-gray-500 hover:text-gray-700 disabled:opacity-50 disabled:cursor-not-allowed"
+                          >
+                            <ChevronLeftIcon className="h-4 w-4" />
+                          </button>
+                          
+                          <div className="flex items-center space-x-1 mx-2">
+                            {getFundPageNumbers().map((pageNumber: number) => (
+                              <button
+                                key={pageNumber}
+                                onClick={() => handleFundPageChange(pageNumber)}
+                                className={`px-3 py-1 text-sm border rounded-md ${
+                                  fundCurrentPage === pageNumber
+                                    ? 'bg-blue-50 text-blue-600 border-blue-200'
+                                    : 'border-gray-300 text-gray-700 hover:bg-gray-50'
+                                }`}
+                              >
+                                {pageNumber}
+                              </button>
+                            ))}
+                          </div>
+                          
+                          <button
+                            onClick={() => handleFundPageChange(fundCurrentPage + 1)}
+                            disabled={fundCurrentPage === fundTotalPages}
+                            className="p-2 text-gray-500 hover:text-gray-700 disabled:opacity-50 disabled:cursor-not-allowed"
+                          >
+                            <ChevronRightIcon className="h-4 w-4" />
+                          </button>
+                        </div>
+                      </div>
+
+                      <div className="overflow-x-auto">
+                        <table className="min-w-full divide-y divide-gray-200">
+                          <thead className="bg-gray-50">
+                            <tr>
+                              <th 
+                                className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100"
+                                onClick={() => handleFundSort('transactionDate')}
+                              >
+                                <div className="flex items-center space-x-1">
+                                  <span>Date</span>
+                                  {fundSortField === 'transactionDate' && (
+                                    <span className="text-indigo-600">
+                                      {fundSortDirection === 'asc' ? '↑' : '↓'}
+                                    </span>
+                                  )}
+                                </div>
+                              </th>
+                              <th 
+                                className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100"
+                                onClick={() => handleFundSort('account')}
+                              >
+                                <div className="flex items-center space-x-1">
+                                  <span>Account Name</span>
+                                  {fundSortField === 'account' && (
+                                    <span className="text-indigo-600">
+                                      {fundSortDirection === 'asc' ? '↑' : '↓'}
+                                    </span>
+                                  )}
+                                </div>
+                              </th>
+                              <th 
+                                className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100"
+                                onClick={() => handleFundSort('type')}
+                              >
+                                <div className="flex items-center space-x-1">
+                                  <span>Type</span>
+                                  {fundSortField === 'type' && (
+                                    <span className="text-indigo-600">
+                                      {fundSortDirection === 'asc' ? '↑' : '↓'}
+                                    </span>
+                                  )}
+                                </div>
+                              </th>
+                              <th 
+                                className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100"
+                                onClick={() => handleFundSort('amount')}
+                              >
+                                <div className="flex items-center space-x-1">
+                                  <span>Amount</span>
+                                  {fundSortField === 'amount' && (
+                                    <span className="text-indigo-600">
+                                      {fundSortDirection === 'asc' ? '↑' : '↓'}
+                                    </span>
+                                  )}
+                                </div>
+                              </th>
+                              <th 
+                                className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100"
+                                onClick={() => handleFundSort('description')}
+                              >
+                                <div className="flex items-center space-x-1">
+                                  <span>Description</span>
+                                  {fundSortField === 'description' && (
+                                    <span className="text-indigo-600">
+                                      {fundSortDirection === 'asc' ? '↑' : '↓'}
+                                    </span>
+                                  )}
+                                </div>
+                              </th>
+                            </tr>
+                          </thead>
+                          <tbody className="bg-white divide-y divide-gray-200">
+                            {paginatedFundTransactions.map((transaction: FundTransaction) => (
+                              <tr key={transaction.id} className="hover:bg-gray-50">
+                                <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
+                                  {formatDate(transaction.transactionDate)}
+                                </td>
+                                <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
+                                  {transaction.account?.name || `Account ${transaction.accountId}`}
+                                </td>
+                                <td className="px-6 py-4 whitespace-nowrap text-sm">
+                                  <span className={`inline-flex px-2 py-1 text-xs font-semibold rounded-full ${
+                                    transaction.type === 'ADDITION' 
+                                      ? 'bg-green-100 text-green-800' 
+                                      : 'bg-red-100 text-red-800'
+                                  }`}>
+                                    {transaction.type}
+                                  </span>
+                                </td>
+                                <td className="px-6 py-4 whitespace-nowrap text-sm font-medium">
+                                  <span className={transaction.type === 'ADDITION' ? 'text-green-600' : 'text-red-600'}>
+                                    {transaction.type === 'ADDITION' ? '+' : '-'}{formatCurrency(transaction.amount)}
+                                  </span>
+                                </td>
+                                <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                                  {transaction.description || '-'}
+                                </td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    </>
+                  ) : (
+                    <div className="text-center py-8">
+                      <p className="text-gray-500">No fund transactions recorded yet.</p>
+                      <p className="text-sm text-gray-400">Add fund transactions to calculate XIRR.</p>
+                    </div>
+                  )}
                 </div>
               </div>
-            </div>
-          ) : (
-            <div className="text-center py-12">
-              <DocumentArrowDownIcon className="mx-auto h-12 w-12 text-gray-400" />
-              <h3 className="mt-2 text-sm font-medium text-gray-900">No records found</h3>
-              <p className="mt-1 text-sm text-gray-500">
-                {(allRecords && allRecords.length > 0) || (dividendRecords && dividendRecords.length > 0)
-                  ? 'No records match your current filters. Try adjusting the filter criteria.'
-                  : 'No P&L or Dividend records found for this account. Upload a CSV file to get started.'
-                }
-              </p>
-            </div>
-          )}
+            )}
+
+            {/* Profit & Loss Tab */}
+            {activeTab === 'profit-loss' && (
+              <div className="space-y-6">
+                {/* Filters Section */}
+                <div className="bg-white shadow sm:rounded-lg">
+                  <div className="px-4 py-5 sm:p-6">
+                    <div className="flex items-center justify-between mb-4">
+                      <div className="flex items-center">
+                        <FunnelIcon className="h-5 w-5 text-gray-400 mr-2" />
+                        <h3 className="text-lg font-medium text-gray-900">Filters</h3>
+                      </div>
+                      <button
+                        onClick={handleRefresh}
+                        disabled={refreshing}
+                        className="inline-flex items-center px-3 py-2 border border-gray-300 shadow-sm text-sm leading-4 font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500 disabled:opacity-50 disabled:cursor-not-allowed"
+                        title="Refresh data based on current filters"
+                      >
+                        <ArrowPathIcon className={`h-4 w-4 mr-1 ${refreshing ? 'animate-spin' : ''}`} />
+                        {refreshing ? 'Refreshing...' : 'Refresh'}
+                      </button>
+                    </div>
+                    <div className="flex items-end gap-4">
+                      <div className="flex-1 max-w-48">
+                        <label className="block text-sm font-medium text-gray-700 mb-1">
+                          Instrument Type
+                        </label>
+                        <select
+                          value={instrumentTypeFilter}
+                          onChange={(e) => setInstrumentTypeFilter(e.target.value)}
+                          className="block w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 sm:text-sm"
+                        >
+                          <option value="">All Types</option>
+                          {uniqueInstrumentTypes.map((type) => (
+                            <option key={type} value={type}>
+                              {type}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+                      <div className="flex-1 max-w-40">
+                        <label className="block text-sm font-medium text-gray-700 mb-1">
+                          Financial Year
+                        </label>
+                        <select
+                          value={financialYearFilter}
+                          onChange={(e) => setFinancialYearFilter(e.target.value)}
+                          className="block w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 sm:text-sm"
+                        >
+                          <option value="">All Years</option>
+                          {getFinancialYears().map((year) => (
+                            <option key={year} value={year}>
+                              {year}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+                      <div className="flex-1 max-w-36">
+                        <label className="block text-sm font-medium text-gray-700 mb-1">
+                          Quarter
+                        </label>
+                        <select
+                          value={quarterFilter}
+                          onChange={(e) => setQuarterFilter(e.target.value)}
+                          className="block w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 sm:text-sm"
+                        >
+                          <option value="">All Quarters</option>
+                          {getQuarters().map((quarter) => (
+                            <option key={quarter.value} value={quarter.value}>
+                              {quarter.label}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+                      {/* Summary Card */}
+                      <div className="bg-white overflow-hidden shadow rounded-lg min-w-64">
+                        <div className="p-5">
+                          <div className="flex items-center">
+                            <div className="flex-shrink-0">
+                              <CurrencyDollarIcon className="h-6 w-6 text-gray-400" />
+                            </div>
+                            <div className="ml-5 w-0 flex-1">
+                              <dl>
+                                <dt className="text-sm font-medium text-gray-500 truncate">Total Profit/Loss</dt>
+                                <dd className="text-lg font-medium text-gray-900">
+                                  <span className={totalProfit >= 0 ? 'text-green-600' : 'text-red-600'}>
+                                    {formatCurrency(totalProfit)}
+                                  </span>
+                                </dd>
+                                {familyAccountBreakdown && familyAccountBreakdown.length > 0 && (
+                                  <dd className="text-xs text-gray-500 mt-1">
+                                    <span className="font-medium">Breakdown:</span>
+                                    {familyAccountBreakdown.map((item, index) => (
+                                      <span key={item.account.id}>
+                                        {index > 0 ? ', ' : ' '}
+                                        {item.account.name}: {formatCurrency(item.profit)}
+                                      </span>
+                                    ))}
+                                  </dd>
+                                )}
+                              </dl>
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                {/* P&L Records Table */}
+                {filteredRecords.length > 0 ? (
+                  <div className="bg-white shadow overflow-hidden sm:rounded-md">
+                    <div className="px-4 py-5 sm:p-6">
+                      <div className="flex items-center justify-between mb-4">
+                        <h3 className="text-lg font-medium text-gray-900">
+                          {instrumentTypeFilter === 'Dividend' ? 'Dividend' : 'P&L'} Records ({filteredRecords.length} records)
+                        </h3>
+                        
+                        {/* Pagination Controls - Top */}
+                        {filteredRecords.length > 0 && (
+                          <div className="flex items-center space-x-4">
+                            <div className="flex items-center space-x-2">
+                              <label htmlFor="items-per-page" className="text-sm text-gray-700">
+                                Show:
+                              </label>
+                              <select
+                                id="items-per-page"
+                                value={itemsPerPage}
+                                onChange={(e) => handleItemsPerPageChange(Number(e.target.value))}
+                                className="block w-20 rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 sm:text-sm"
+                              >
+                                <option value={10}>10</option>
+                                <option value={25}>25</option>
+                                <option value={50}>50</option>
+                                <option value={100}>100</option>
+                              </select>
+                            </div>
+                            
+                            <div className="flex items-center space-x-2">
+                              <p className="text-sm text-gray-700">
+                                Showing{' '}
+                                <span className="font-medium">{startIndex + 1}</span>
+                                {' '}to{' '}
+                                <span className="font-medium">{Math.min(endIndex, filteredRecords.length)}</span>
+                                {' '}of{' '}
+                                <span className="font-medium">{filteredRecords.length}</span>
+                              </p>
+                              
+                              <nav className="relative z-0 inline-flex rounded-md shadow-sm -space-x-px" aria-label="Pagination">
+                                <button
+                                  onClick={() => handlePageChange(currentPage - 1)}
+                                  disabled={currentPage === 1}
+                                  className="relative inline-flex items-center px-2 py-2 rounded-l-md border border-gray-300 bg-white text-sm font-medium text-gray-500 hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
+                                >
+                                  <span className="sr-only">Previous</span>
+                                  <svg className="h-5 w-5" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
+                                    <path fillRule="evenodd" d="M12.707 5.293a1 1 0 010 1.414L9.414 10l3.293 3.293a1 1 0 01-1.414 1.414l-4-4a1 1 0 010-1.414l4-4a1 1 0 011.414 0z" clipRule="evenodd" />
+                                  </svg>
+                                </button>
+                                
+                                {/* Page numbers */}
+                                {Array.from({ length: Math.min(5, totalPages) }, (_, i) => {
+                                  let pageNumber: number;
+                                  if (totalPages <= 5) {
+                                    pageNumber = i + 1;
+                                  } else if (currentPage <= 3) {
+                                    pageNumber = i + 1;
+                                  } else if (currentPage >= totalPages - 2) {
+                                    pageNumber = totalPages - 4 + i;
+                                  } else {
+                                    pageNumber = currentPage - 2 + i;
+                                  }
+                                  
+                                  return (
+                                    <button
+                                      key={pageNumber}
+                                      onClick={() => handlePageChange(pageNumber)}
+                                      className={`relative inline-flex items-center px-4 py-2 border text-sm font-medium ${
+                                        pageNumber === currentPage
+                                          ? 'z-10 bg-indigo-50 border-indigo-500 text-indigo-600'
+                                          : 'bg-white border-gray-300 text-gray-500 hover:bg-gray-50'
+                                      }`}
+                                    >
+                                      {pageNumber}
+                                    </button>
+                                  );
+                                })}
+                                
+                                <button
+                                  onClick={() => handlePageChange(currentPage + 1)}
+                                  disabled={currentPage === totalPages}
+                                  className="relative inline-flex items-center px-2 py-2 rounded-r-md border border-gray-300 bg-white text-sm font-medium text-gray-500 hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
+                                >
+                                  <span className="sr-only">Next</span>
+                                  <svg className="h-5 w-5" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
+                                    <path fillRule="evenodd" d="M7.293 14.707a1 1 0 010-1.414L10.586 10 7.293 6.707a1 1 0 011.414-1.414l4 4a1 1 0 010 1.414l-4 4a1 1 0 01-1.414 0z" clipRule="evenodd" />
+                                  </svg>
+                                </button>
+                              </nav>
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                      <div className="overflow-x-auto">
+                        <table className="min-w-full divide-y divide-gray-200">
+                          <thead className="bg-gray-50">
+                            <tr>
+                              <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                                Symbol
+                              </th>
+                              <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                                Instrument Type
+                              </th>
+                              <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                                {instrumentTypeFilter === 'Dividend' ? 'Ex-Date' : 'Entry Date'}
+                              </th>
+                              {instrumentTypeFilter !== 'Dividend' && (
+                                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                                  Exit Date
+                                </th>
+                              )}
+                              <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                                Quantity
+                              </th>
+                              {instrumentTypeFilter !== 'Dividend' && (
+                                <>
+                                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                                    Buy Value
+                                  </th>
+                                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                                    Sell Value
+                                  </th>
+                                </>
+                              )}
+                              {instrumentTypeFilter === 'Dividend' && (
+                                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                                  Dividend Per Share
+                                </th>
+                              )}
+                              <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                                {instrumentTypeFilter === 'Dividend' ? 'Net Dividend Amount' : 'Profit/Loss'}
+                              </th>
+                              {instrumentTypeFilter !== 'Dividend' && (
+                                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                                  Brokerage
+                                </th>
+                              )}
+                            </tr>
+                          </thead>
+                          <tbody className="bg-white divide-y divide-gray-200">
+                            {paginatedRecords.map((record) => (
+                              <tr key={`${record.recordType}-${record.id}`} className="hover:bg-gray-50">
+                                <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">
+                                  {record.symbol || '-'}
+                                </td>
+                                <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                                  {record.instrumentType}
+                                </td>
+                                <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                                  {record.entryDate ? formatDate(record.entryDate) : '-'}
+                                </td>
+                                {instrumentTypeFilter !== 'Dividend' && (
+                                  <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                                    {record.exitDate ? formatDate(record.exitDate) : '-'}
+                                  </td>
+                                )}
+                                <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                                  {record.quantity || '-'}
+                                </td>
+                                {instrumentTypeFilter !== 'Dividend' && (
+                                  <>
+                                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                                      {formatCurrency(record.buyValue)}
+                                    </td>
+                                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                                      {formatCurrency(record.sellValue)}
+                                    </td>
+                                  </>
+                                )}
+                                {instrumentTypeFilter === 'Dividend' && (
+                                  <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                                    {formatCurrency(record.dividendPerShare || 0)}
+                                  </td>
+                                )}
+                                <td className="px-6 py-4 whitespace-nowrap text-sm font-medium">
+                                  <span className={record.profit && record.profit >= 0 ? 'text-green-600' : 'text-red-600'}>
+                                    {formatCurrency(record.profit)}
+                                  </span>
+                                </td>
+                                {instrumentTypeFilter !== 'Dividend' && (
+                                  <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                                    {formatCurrency(record.brokerage)}
+                                  </td>
+                                )}
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="text-center py-12">
+                    <DocumentArrowDownIcon className="mx-auto h-12 w-12 text-gray-400" />
+                    <h3 className="mt-2 text-sm font-medium text-gray-900">No records found</h3>
+                    <p className="mt-1 text-sm text-gray-500">
+                      {(allRecords && allRecords.length > 0) || (dividendRecords && dividendRecords.length > 0)
+                        ? 'No records match your current filters. Try adjusting the filter criteria.'
+                        : 'No P&L or Dividend records found for this account. Upload a CSV file to get started.'
+                      }
+                    </p>
+                  </div>
+                )}
+              </div>
+            )}
+
+          </div>
 
           {/* Upload Modal */}
           {showUploadModal && (
@@ -931,6 +1886,300 @@ const PnL: React.FC = () => {
                       className="px-4 py-2 text-sm font-medium text-white bg-yellow-600 rounded-md hover:bg-yellow-700 disabled:opacity-50"
                     >
                       {uploading ? 'Uploading...' : 'Upload All Records (Including Duplicates)'}
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* CSV Duplicate Confirmation Modal */}
+          {showCSVDuplicateModal && csvDuplicateInfo && (
+            <div className="fixed inset-0 bg-gray-600 bg-opacity-50 overflow-y-auto h-full w-full z-[60]">
+              <div className="relative top-20 mx-auto p-5 border w-[600px] shadow-lg rounded-md bg-white">
+                <div className="mt-3">
+                  <div className="flex items-center mb-4">
+                    <ExclamationTriangleIcon className="h-6 w-6 text-yellow-500 mr-2" />
+                    <h3 className="text-lg font-medium text-gray-900">Duplicate Fund Transactions Found</h3>
+                  </div>
+                  
+                  <div className="mb-4 p-4 bg-yellow-50 border border-yellow-200 rounded-md">
+                    <p className="text-sm text-gray-700 mb-2">
+                      The file contains <strong>{csvDuplicateInfo.duplicateCount}</strong> duplicate transactions out of <strong>{csvDuplicateInfo.totalRecords}</strong> total transactions.
+                    </p>
+                    <p className="text-sm text-gray-600">
+                      <strong>{csvDuplicateInfo.uniqueRecords.length}</strong> unique transactions will be added to your database.
+                    </p>
+                  </div>
+
+                  {csvDuplicateInfo.duplicates.length > 0 && (
+                    <div className="mb-4">
+                      <h4 className="text-sm font-medium text-gray-900 mb-2">Duplicate Transactions:</h4>
+                      <div className="max-h-40 overflow-y-auto border border-gray-200 rounded-md">
+                        <table className="min-w-full text-xs">
+                          <thead className="bg-gray-50">
+                            <tr>
+                              <th className="px-3 py-2 text-left">Date</th>
+                              <th className="px-3 py-2 text-left">Type</th>
+                              <th className="px-3 py-2 text-left">Amount</th>
+                              <th className="px-3 py-2 text-left">Description</th>
+                            </tr>
+                          </thead>
+                          <tbody className="bg-white divide-y divide-gray-200">
+                            {csvDuplicateInfo.duplicates.slice(0, 10).map((duplicate, index) => (
+                              <tr key={index} className="hover:bg-gray-50">
+                                <td className="px-3 py-2">
+                                  {new Date(duplicate.posting_date).toLocaleDateString()}
+                                </td>
+                                <td className="px-3 py-2">
+                                  <span className={`inline-flex px-2 py-1 text-xs font-semibold rounded-full ${
+                                    duplicate.type === 'ADDITION' 
+                                      ? 'bg-green-100 text-green-800' 
+                                      : 'bg-red-100 text-red-800'
+                                  }`}>
+                                    {duplicate.type}
+                                  </span>
+                                </td>
+                                <td className="px-3 py-2">
+                                  <span className={duplicate.type === 'ADDITION' ? 'text-green-600' : 'text-red-600'}>
+                                    {duplicate.type === 'ADDITION' ? '+' : '-'}{formatCurrency(duplicate.amount)}
+                                  </span>
+                                </td>
+                                <td className="px-3 py-2">{duplicate.particulars}</td>
+                              </tr>
+                            ))}
+                            {csvDuplicateInfo.duplicates.length > 10 && (
+                              <tr>
+                                <td colSpan={4} className="px-3 py-2 text-center text-gray-500">
+                                  ... and {csvDuplicateInfo.duplicates.length - 10} more duplicates
+                                </td>
+                              </tr>
+                            )}
+                          </tbody>
+                        </table>
+                      </div>
+                    </div>
+                  )}
+
+                  <div className="flex justify-end space-x-3">
+                    <button
+                      onClick={handleCSVDuplicateSkip}
+                      className="px-4 py-2 text-sm font-medium text-gray-700 bg-gray-100 rounded-md hover:bg-gray-200"
+                    >
+                      Cancel
+                    </button>
+                    <button
+                      onClick={handleCSVDuplicateConfirm}
+                      disabled={csvUploading}
+                      className="px-4 py-2 text-sm font-medium text-white bg-green-600 rounded-md hover:bg-green-700 disabled:opacity-50"
+                    >
+                      {csvUploading ? 'Uploading...' : `Upload ${csvDuplicateInfo.uniqueRecords.length} Unique Transactions`}
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* Fund Transaction Modal */}
+          {showFundModal && (
+            <div className="fixed inset-0 bg-gray-600 bg-opacity-50 overflow-y-auto h-full w-full z-50">
+              <div className="relative top-20 mx-auto p-5 border w-96 shadow-lg rounded-md bg-white">
+                <div className="mt-3">
+                  <h3 className="text-lg font-medium text-gray-900 mb-4">Add Fund Transaction</h3>
+                  
+                  <div className="space-y-4">
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-1">
+                        Account
+                      </label>
+                      <select
+                        value={fundTransactionForm.accountId}
+                        onChange={(e) => setFundTransactionForm({
+                          ...fundTransactionForm,
+                          accountId: Number(e.target.value)
+                        })}
+                        className="block w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 sm:text-sm"
+                      >
+                        <option value={0}>Select Account</option>
+                        {accounts?.map((account) => (
+                          <option key={account.id} value={account.id}>
+                            {account.name} ({account.id})
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-1">
+                        Transaction Date
+                      </label>
+                      <input
+                        type="date"
+                        value={fundTransactionForm.transactionDate}
+                        onChange={(e) => setFundTransactionForm({
+                          ...fundTransactionForm,
+                          transactionDate: e.target.value
+                        })}
+                        className="block w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 sm:text-sm"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-1">
+                        Amount
+                      </label>
+                      <input
+                        type="number"
+                        step="0.01"
+                        min="0"
+                        value={fundTransactionForm.amount}
+                        onChange={(e) => setFundTransactionForm({
+                          ...fundTransactionForm,
+                          amount: Number(e.target.value)
+                        })}
+                        className="block w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 sm:text-sm"
+                        placeholder="Enter amount"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-1">
+                        Type
+                      </label>
+                      <select
+                        value={fundTransactionForm.type}
+                        onChange={(e) => setFundTransactionForm({
+                          ...fundTransactionForm,
+                          type: e.target.value
+                        })}
+                        className="block w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 sm:text-sm"
+                      >
+                        <option value="ADDITION">Fund Addition</option>
+                        <option value="WITHDRAWAL">Fund Withdrawal</option>
+                      </select>
+                    </div>
+
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-1">
+                        Description (Optional)
+                      </label>
+                      <input
+                        type="text"
+                        value={fundTransactionForm.description}
+                        onChange={(e) => setFundTransactionForm({
+                          ...fundTransactionForm,
+                          description: e.target.value
+                        })}
+                        className="block w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 sm:text-sm"
+                        placeholder="Enter description"
+                      />
+                    </div>
+                  </div>
+
+                  <div className="flex justify-end space-x-3 mt-6">
+                    <button
+                      onClick={() => {
+                        setShowFundModal(false);
+                        setFundTransactionForm({
+                          accountId: selectedAccount || 0,
+                          transactionDate: new Date().toISOString().split('T')[0],
+                          amount: 0,
+                          type: 'ADDITION',
+                          description: '',
+                        });
+                      }}
+                      className="px-4 py-2 text-sm font-medium text-gray-700 bg-gray-100 rounded-md hover:bg-gray-200"
+                    >
+                      Cancel
+                    </button>
+                    <button
+                      onClick={handleFundTransactionSubmit}
+                      disabled={fundTransactionMutation.isPending}
+                      className="px-4 py-2 text-sm font-medium text-white bg-indigo-600 rounded-md hover:bg-indigo-700 disabled:opacity-50"
+                    >
+                      {fundTransactionMutation.isPending ? 'Adding...' : 'Add Transaction'}
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* CSV Upload Modal */}
+          {showCSVUploadModal && (
+            <div className="fixed inset-0 bg-gray-600 bg-opacity-50 overflow-y-auto h-full w-full z-50">
+              <div className="relative top-20 mx-auto p-5 border w-96 shadow-lg rounded-md bg-white">
+                <div className="mt-3">
+                  <h3 className="text-lg font-medium text-gray-900 mb-4">Upload Fund Transactions CSV</h3>
+                  <p className="text-sm text-gray-600 mb-4">
+                    Upload a ledger CSV file to automatically import fund transactions. 
+                    The system will filter out "Book Voucher" and "Delivery Voucher" entries.
+                  </p>
+                  
+                  {/* Account Selection - Only show in family view */}
+                  {familyView && (
+                    <div className="mb-4">
+                      <label className="block text-sm font-medium text-gray-700 mb-1">
+                        Select Account
+                      </label>
+                      <select
+                        value={csvUploadAccountId || ''}
+                        onChange={(e) => setCsvUploadAccountId(e.target.value ? parseInt(e.target.value) : null)}
+                        className="block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm"
+                        required
+                      >
+                        <option value="">Choose an account...</option>
+                        {accounts?.map((account) => (
+                          <option key={account.id} value={account.id}>
+                            {account.name} {account.family && `(${account.family})`}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                  )}
+
+                  <div className="mb-4">
+                    <label className="block text-sm font-medium text-gray-700 mb-1">
+                      Select CSV File
+                    </label>
+                    <input
+                      type="file"
+                      accept=".csv"
+                      onChange={(e) => setCsvUploadFile(e.target.files?.[0] || null)}
+                      className="block w-full text-sm text-gray-500 file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-sm file:font-semibold file:bg-indigo-50 file:text-indigo-700 hover:file:bg-indigo-100"
+                    />
+                  </div>
+
+                  <div className="mb-4 p-3 bg-blue-50 border border-blue-200 rounded-md">
+                    <p className="text-sm text-blue-700">
+                      <strong>Expected CSV format:</strong><br/>
+                      • Column A: particulars (description)<br/>
+                      • Column B: posting_date (transaction date)<br/>
+                      • Column C: cost_center (ignored)<br/>
+                      • Column D: voucher_type (filtered)<br/>
+                      • Column E: debit (withdrawals)<br/>
+                      • Column F: credit (additions)
+                    </p>
+                  </div>
+
+                  <div className="flex justify-end space-x-3">
+                    <button
+                      onClick={() => {
+                        setShowCSVUploadModal(false);
+                        setCsvUploadFile(null);
+                        setCsvUploadAccountId(null);
+                      }}
+                      className="px-4 py-2 text-sm font-medium text-gray-700 bg-gray-100 rounded-md hover:bg-gray-200"
+                    >
+                      Cancel
+                    </button>
+                    <button
+                      onClick={handleCSVUpload}
+                      disabled={!csvUploadFile || csvUploading || csvCheckingDuplicates || (familyView && !csvUploadAccountId)}
+                      className="px-4 py-2 text-sm font-medium text-white bg-indigo-600 rounded-md hover:bg-indigo-700 disabled:opacity-50"
+                    >
+                      {csvCheckingDuplicates ? 'Checking Duplicates...' : csvUploading ? 'Uploading...' : 'Upload CSV'}
                     </button>
                   </div>
                 </div>
