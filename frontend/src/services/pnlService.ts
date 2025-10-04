@@ -42,6 +42,13 @@ export interface PnLRecord {
   stt?: number;
   createdAt: string;
   updatedAt: string;
+  upload?: {
+    account?: {
+      id: number;
+      name: string;
+      family?: string;
+    };
+  };
 }
 
 export interface PnLSummary {

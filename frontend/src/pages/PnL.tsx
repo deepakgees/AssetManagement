@@ -1512,37 +1512,6 @@ const PnL: React.FC = () => {
                           ))}
                         </select>
                       </div>
-                      {/* Summary Card */}
-                      <div className="bg-white overflow-hidden shadow rounded-lg min-w-64">
-                        <div className="p-5">
-                          <div className="flex items-center">
-                            <div className="flex-shrink-0">
-                              <CurrencyDollarIcon className="h-6 w-6 text-gray-400" />
-                            </div>
-                            <div className="ml-5 w-0 flex-1">
-                              <dl>
-                                <dt className="text-sm font-medium text-gray-500 truncate">Total Profit/Loss</dt>
-                                <dd className="text-lg font-medium text-gray-900">
-                                  <span className={totalProfit >= 0 ? 'text-green-600' : 'text-red-600'}>
-                                    {formatCurrency(totalProfit)}
-                                  </span>
-                                </dd>
-                                {familyAccountBreakdown && familyAccountBreakdown.length > 0 && (
-                                  <dd className="text-xs text-gray-500 mt-1">
-                                    <span className="font-medium">Breakdown:</span>
-                                    {familyAccountBreakdown.map((item, index) => (
-                                      <span key={item.account.id}>
-                                        {index > 0 ? ', ' : ' '}
-                                        {item.account.name}: {formatCurrency(item.profit)}
-                                      </span>
-                                    ))}
-                                  </dd>
-                                )}
-                              </dl>
-                            </div>
-                          </div>
-                        </div>
-                      </div>
                     </div>
                   </div>
                 </div>
@@ -1646,6 +1615,9 @@ const PnL: React.FC = () => {
                           <thead className="bg-gray-50">
                             <tr>
                               <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                                Account
+                              </th>
+                              <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
                                 Symbol
                               </th>
                               <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
@@ -1690,6 +1662,9 @@ const PnL: React.FC = () => {
                           <tbody className="bg-white divide-y divide-gray-200">
                             {paginatedRecords.map((record) => (
                               <tr key={`${record.recordType}-${record.id}`} className="hover:bg-gray-50">
+                                <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">
+                                  {record.upload?.account?.name || '-'}
+                                </td>
                                 <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">
                                   {record.symbol || '-'}
                                 </td>
