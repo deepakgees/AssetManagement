@@ -78,6 +78,10 @@ const PnL: React.FC = () => {
   const [fundSortField, setFundSortField] = useState<keyof FundTransaction | null>(null);
   const [fundSortDirection, setFundSortDirection] = useState<'asc' | 'desc'>('asc');
   
+  // P&L records sorting states
+  const [pnlSortField, setPnlSortField] = useState<string | null>(null);
+  const [pnlSortDirection, setPnlSortDirection] = useState<'asc' | 'desc'>('asc');
+  
   // Fund transaction summary states
   const [fundTransactionSummary, setFundTransactionSummary] = useState<{
     [accountId: number]: {
@@ -440,6 +444,18 @@ const PnL: React.FC = () => {
     setSelectedFamilyName(null);
   };
 
+  // Handle P&L records sorting
+  const handlePnlSort = (field: string) => {
+    if (pnlSortField === field) {
+      // Toggle direction if same field
+      setPnlSortDirection(pnlSortDirection === 'asc' ? 'desc' : 'asc');
+    } else {
+      // Set new field with ascending direction
+      setPnlSortField(field);
+      setPnlSortDirection('asc');
+    }
+  };
+
   // Refresh data based on current filters
   const handleRefresh = async () => {
     setRefreshing(true);
@@ -463,9 +479,9 @@ const PnL: React.FC = () => {
     
     // Add P&L records based on view mode
     if (familyView) {
-      // Use family-level records
-      if (familyRecords) {
-        records.push(...familyRecords.map((record: any) => ({
+      // Use all records for family view to preserve account information
+      if (allRecords) {
+        records.push(...allRecords.map(record => ({
           ...record,
           recordType: 'pnl'
         })));
@@ -511,7 +527,7 @@ const PnL: React.FC = () => {
     }
     
     // Apply filters
-    return records.filter(record => {
+    const filtered = records.filter(record => {
       // Filter by instrument type
       if (instrumentTypeFilter && record.instrumentType !== instrumentTypeFilter) {
         return false;
@@ -551,11 +567,89 @@ const PnL: React.FC = () => {
       
       return true;
     });
+
+    // Apply sorting
+    if (pnlSortField) {
+      return filtered.sort((a, b) => {
+        let aValue: any;
+        let bValue: any;
+
+        switch (pnlSortField) {
+          case 'account':
+            aValue = a.account?.name || '';
+            bValue = b.account?.name || '';
+            break;
+          case 'symbol':
+            aValue = a.symbol || '';
+            bValue = b.symbol || '';
+            break;
+          case 'instrumentType':
+            aValue = a.instrumentType || '';
+            bValue = b.instrumentType || '';
+            break;
+          case 'entryDate':
+            aValue = a.entryDate ? new Date(a.entryDate) : new Date(0);
+            bValue = b.entryDate ? new Date(b.entryDate) : new Date(0);
+            break;
+          case 'exitDate':
+            aValue = a.exitDate ? new Date(a.exitDate) : new Date(0);
+            bValue = b.exitDate ? new Date(b.exitDate) : new Date(0);
+            break;
+          case 'quantity':
+            aValue = a.quantity || 0;
+            bValue = b.quantity || 0;
+            break;
+          case 'buyValue':
+            aValue = a.buyValue || 0;
+            bValue = b.buyValue || 0;
+            break;
+          case 'sellValue':
+            aValue = a.sellValue || 0;
+            bValue = b.sellValue || 0;
+            break;
+          case 'profit':
+            aValue = a.profit || 0;
+            bValue = b.profit || 0;
+            break;
+          case 'brokerage':
+            aValue = a.brokerage || 0;
+            bValue = b.brokerage || 0;
+            break;
+          case 'dividendPerShare':
+            aValue = a.dividendPerShare || 0;
+            bValue = b.dividendPerShare || 0;
+            break;
+          default:
+            return 0;
+        }
+
+        // Handle string comparison
+        if (typeof aValue === 'string' && typeof bValue === 'string') {
+          const comparison = aValue.localeCompare(bValue);
+          return pnlSortDirection === 'asc' ? comparison : -comparison;
+        }
+
+        // Handle numeric comparison
+        if (typeof aValue === 'number' && typeof bValue === 'number') {
+          return pnlSortDirection === 'asc' ? aValue - bValue : bValue - aValue;
+        }
+
+        // Handle date comparison
+        if (aValue instanceof Date && bValue instanceof Date) {
+          const comparison = aValue.getTime() - bValue.getTime();
+          return pnlSortDirection === 'asc' ? comparison : -comparison;
+        }
+
+        return 0;
+      });
+    }
+
+    return filtered;
   })();
 
   // Get unique instrument types for filter dropdown (including Dividend)
   const uniqueInstrumentTypes = [...new Set([
-    ...(familyView ? (familyRecords?.map(record => record.instrumentType) || []) : (allRecords?.map(record => record.instrumentType) || [])),
+    ...(allRecords?.map(record => record.instrumentType) || []),
     'Dividend'
   ])].sort();
 
@@ -836,8 +930,8 @@ const PnL: React.FC = () => {
       // For family view, we need to get the individual account data
       // Since we're showing family-level aggregated data, we'll calculate
       // the breakdown based on the accounts in the family
-      const accountRecords = allRecords?.filter(record => (record as any).upload?.account?.id === account.id) || [];
-      const dividendAccountRecords = dividendRecords?.filter(record => (record as any).upload?.account?.id === account.id) || [];
+      const accountRecords = allRecords?.filter(record => (record as any).account?.id === account.id) || [];
+      const dividendAccountRecords = dividendRecords?.filter(record => (record as any).account?.id === account.id) || [];
       
       // Apply the same filters as the main filteredRecords
       const filteredAccountRecords = [...accountRecords, ...dividendAccountRecords].filter(record => {
@@ -947,13 +1041,6 @@ const PnL: React.FC = () => {
                     </button>
                   </div>
                 </div>
-                <button
-                  onClick={() => setShowUploadModal(true)}
-                  className="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md shadow-sm text-white bg-indigo-600 hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500"
-                >
-                  <CloudArrowUpIcon className="h-4 w-4 mr-2" />
-                  Upload CSV
-                </button>
               </div>
             </div>
           </div>
@@ -1516,6 +1603,28 @@ const PnL: React.FC = () => {
                   </div>
                 </div>
 
+                {/* Upload CSV Section */}
+                <div className="bg-white shadow sm:rounded-lg">
+                  <div className="px-4 py-5 sm:p-6">
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center">
+                        <CloudArrowUpIcon className="h-5 w-5 text-gray-400 mr-2" />
+                        <h3 className="text-lg font-medium text-gray-900">Upload P&L Records</h3>
+                      </div>
+                      <button
+                        onClick={() => setShowUploadModal(true)}
+                        className="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md shadow-sm text-white bg-indigo-600 hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500"
+                      >
+                        <CloudArrowUpIcon className="h-4 w-4 mr-2" />
+                        Upload CSV
+                      </button>
+                    </div>
+                    <p className="mt-2 text-sm text-gray-600">
+                      Upload P&L or Dividend CSV files. The system will automatically detect the file type.
+                    </p>
+                  </div>
+                </div>
+
                 {/* P&L Records Table */}
                 {filteredRecords.length > 0 ? (
                   <div className="bg-white shadow overflow-hidden sm:rounded-md">
@@ -1614,47 +1723,157 @@ const PnL: React.FC = () => {
                         <table className="min-w-full divide-y divide-gray-200">
                           <thead className="bg-gray-50">
                             <tr>
-                              <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                                Account
+                              <th 
+                                className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100"
+                                onClick={() => handlePnlSort('account')}
+                              >
+                                <div className="flex items-center space-x-1">
+                                  <span>Account</span>
+                                  {pnlSortField === 'account' && (
+                                    <span className="text-indigo-600">
+                                      {pnlSortDirection === 'asc' ? '↑' : '↓'}
+                                    </span>
+                                  )}
+                                </div>
                               </th>
-                              <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                                Symbol
+                              <th 
+                                className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100"
+                                onClick={() => handlePnlSort('symbol')}
+                              >
+                                <div className="flex items-center space-x-1">
+                                  <span>Symbol</span>
+                                  {pnlSortField === 'symbol' && (
+                                    <span className="text-indigo-600">
+                                      {pnlSortDirection === 'asc' ? '↑' : '↓'}
+                                    </span>
+                                  )}
+                                </div>
                               </th>
-                              <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                                Instrument Type
+                              <th 
+                                className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100"
+                                onClick={() => handlePnlSort('instrumentType')}
+                              >
+                                <div className="flex items-center space-x-1">
+                                  <span>Instrument Type</span>
+                                  {pnlSortField === 'instrumentType' && (
+                                    <span className="text-indigo-600">
+                                      {pnlSortDirection === 'asc' ? '↑' : '↓'}
+                                    </span>
+                                  )}
+                                </div>
                               </th>
-                              <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                                {instrumentTypeFilter === 'Dividend' ? 'Ex-Date' : 'Entry Date'}
+                              <th 
+                                className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100"
+                                onClick={() => handlePnlSort('entryDate')}
+                              >
+                                <div className="flex items-center space-x-1">
+                                  <span>{instrumentTypeFilter === 'Dividend' ? 'Ex-Date' : 'Entry Date'}</span>
+                                  {pnlSortField === 'entryDate' && (
+                                    <span className="text-indigo-600">
+                                      {pnlSortDirection === 'asc' ? '↑' : '↓'}
+                                    </span>
+                                  )}
+                                </div>
                               </th>
                               {instrumentTypeFilter !== 'Dividend' && (
-                                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                                  Exit Date
+                                <th 
+                                  className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100"
+                                  onClick={() => handlePnlSort('exitDate')}
+                                >
+                                  <div className="flex items-center space-x-1">
+                                    <span>Exit Date</span>
+                                    {pnlSortField === 'exitDate' && (
+                                      <span className="text-indigo-600">
+                                        {pnlSortDirection === 'asc' ? '↑' : '↓'}
+                                      </span>
+                                    )}
+                                  </div>
                                 </th>
                               )}
-                              <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                                Quantity
+                              <th 
+                                className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100"
+                                onClick={() => handlePnlSort('quantity')}
+                              >
+                                <div className="flex items-center space-x-1">
+                                  <span>Quantity</span>
+                                  {pnlSortField === 'quantity' && (
+                                    <span className="text-indigo-600">
+                                      {pnlSortDirection === 'asc' ? '↑' : '↓'}
+                                    </span>
+                                  )}
+                                </div>
                               </th>
                               {instrumentTypeFilter !== 'Dividend' && (
                                 <>
-                                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                                    Buy Value
+                                  <th 
+                                    className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100"
+                                    onClick={() => handlePnlSort('buyValue')}
+                                  >
+                                    <div className="flex items-center space-x-1">
+                                      <span>Buy Value</span>
+                                      {pnlSortField === 'buyValue' && (
+                                        <span className="text-indigo-600">
+                                          {pnlSortDirection === 'asc' ? '↑' : '↓'}
+                                        </span>
+                                      )}
+                                    </div>
                                   </th>
-                                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                                    Sell Value
+                                  <th 
+                                    className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100"
+                                    onClick={() => handlePnlSort('sellValue')}
+                                  >
+                                    <div className="flex items-center space-x-1">
+                                      <span>Sell Value</span>
+                                      {pnlSortField === 'sellValue' && (
+                                        <span className="text-indigo-600">
+                                          {pnlSortDirection === 'asc' ? '↑' : '↓'}
+                                        </span>
+                                      )}
+                                    </div>
                                   </th>
                                 </>
                               )}
                               {instrumentTypeFilter === 'Dividend' && (
-                                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                                  Dividend Per Share
+                                <th 
+                                  className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100"
+                                  onClick={() => handlePnlSort('dividendPerShare')}
+                                >
+                                  <div className="flex items-center space-x-1">
+                                    <span>Dividend Per Share</span>
+                                    {pnlSortField === 'dividendPerShare' && (
+                                      <span className="text-indigo-600">
+                                        {pnlSortDirection === 'asc' ? '↑' : '↓'}
+                                      </span>
+                                    )}
+                                  </div>
                                 </th>
                               )}
-                              <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                                {instrumentTypeFilter === 'Dividend' ? 'Net Dividend Amount' : 'Profit/Loss'}
+                              <th 
+                                className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100"
+                                onClick={() => handlePnlSort('profit')}
+                              >
+                                <div className="flex items-center space-x-1">
+                                  <span>{instrumentTypeFilter === 'Dividend' ? 'Net Dividend Amount' : 'Profit/Loss'}</span>
+                                  {pnlSortField === 'profit' && (
+                                    <span className="text-indigo-600">
+                                      {pnlSortDirection === 'asc' ? '↑' : '↓'}
+                                    </span>
+                                  )}
+                                </div>
                               </th>
                               {instrumentTypeFilter !== 'Dividend' && (
-                                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                                  Brokerage
+                                <th 
+                                  className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100"
+                                  onClick={() => handlePnlSort('brokerage')}
+                                >
+                                  <div className="flex items-center space-x-1">
+                                    <span>Brokerage</span>
+                                    {pnlSortField === 'brokerage' && (
+                                      <span className="text-indigo-600">
+                                        {pnlSortDirection === 'asc' ? '↑' : '↓'}
+                                      </span>
+                                    )}
+                                  </div>
                                 </th>
                               )}
                             </tr>
@@ -1663,7 +1882,7 @@ const PnL: React.FC = () => {
                             {paginatedRecords.map((record) => (
                               <tr key={`${record.recordType}-${record.id}`} className="hover:bg-gray-50">
                                 <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">
-                                  {record.upload?.account?.name || '-'}
+                                  {record.account?.name || '-'}
                                 </td>
                                 <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">
                                   {record.symbol || '-'}
@@ -1740,6 +1959,29 @@ const PnL: React.FC = () => {
                   <p className="text-sm text-gray-600 mb-4">
                     Upload P&L or Dividend CSV files. The system will automatically detect the file type.
                   </p>
+                  
+                  {/* Account Selection - Only show in family view */}
+                  {familyView && (
+                    <div className="mb-4">
+                      <label className="block text-sm font-medium text-gray-700 mb-1">
+                        Select Account
+                      </label>
+                      <select
+                        value={selectedAccount || ''}
+                        onChange={(e) => setSelectedAccount(Number(e.target.value) || null)}
+                        className="block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm"
+                        required
+                      >
+                        <option value="">Choose an account...</option>
+                        {accounts?.map((account) => (
+                          <option key={account.id} value={account.id}>
+                            {account.name} {account.family && `(${account.family})`}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                  )}
+
                   <div className="mb-4">
                     <input
                       type="file"
@@ -1753,6 +1995,7 @@ const PnL: React.FC = () => {
                       onClick={() => {
                         setShowUploadModal(false);
                         setUploadFile(null);
+                        setSelectedAccount(null);
                       }}
                       className="px-4 py-2 text-sm font-medium text-gray-700 bg-gray-100 rounded-md hover:bg-gray-200"
                     >
@@ -1760,7 +2003,7 @@ const PnL: React.FC = () => {
                     </button>
                     <button
                       onClick={handleFileUpload}
-                      disabled={!uploadFile || uploading || checkingDuplicates}
+                      disabled={!uploadFile || uploading || checkingDuplicates || (familyView && !selectedAccount)}
                       className="px-4 py-2 text-sm font-medium text-white bg-indigo-600 rounded-md hover:bg-indigo-700 disabled:opacity-50"
                     >
                       {checkingDuplicates ? 'Checking Duplicates...' : uploading ? 'Uploading...' : 'Upload'}
@@ -2210,13 +2453,6 @@ const PnL: React.FC = () => {
                   </button>
                 </div>
               </div>
-              <button
-                onClick={() => setShowUploadModal(true)}
-                className="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md shadow-sm text-white bg-indigo-600 hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500"
-              >
-                <PlusIcon className="h-4 w-4 mr-2" />
-                Upload CSV
-              </button>
             </div>
           </div>
         </div>
@@ -2320,63 +2556,6 @@ const PnL: React.FC = () => {
           </div>
         )}
 
-        {/* Upload Modal for main page */}
-        {showUploadModal && (
-          <div className="fixed inset-0 bg-gray-600 bg-opacity-50 overflow-y-auto h-full w-full z-50">
-            <div className="relative top-20 mx-auto p-5 border w-96 shadow-lg rounded-md bg-white">
-              <div className="mt-3">
-                <h3 className="text-lg font-medium text-gray-900 mb-4">Upload CSV File</h3>
-                <p className="text-sm text-gray-600 mb-4">
-                  Upload P&L or Dividend CSV files. The system will automatically detect the file type.
-                </p>
-                <div className="mb-4">
-                  <label className="block text-sm font-medium text-gray-700 mb-2">
-                    Select Account
-                  </label>
-                  <select
-                    value={selectedAccount || ''}
-                    onChange={(e) => setSelectedAccount(Number(e.target.value) || null)}
-                    className="block w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 sm:text-sm"
-                  >
-                    <option value="">Select an account</option>
-                    {accounts?.map((account) => (
-                      <option key={account.id} value={account.id}>
-                        {account.name} ({account.id})
-                      </option>
-                    ))}
-                  </select>
-                </div>
-                <div className="mb-4">
-                  <input
-                    type="file"
-                    accept=".csv"
-                    onChange={(e) => setUploadFile(e.target.files?.[0] || null)}
-                    className="block w-full text-sm text-gray-500 file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-sm file:font-semibold file:bg-indigo-50 file:text-indigo-700 hover:file:bg-indigo-100"
-                  />
-                </div>
-                <div className="flex justify-end space-x-3">
-                  <button
-                    onClick={() => {
-                      setShowUploadModal(false);
-                      setUploadFile(null);
-                      setSelectedAccount(null);
-                    }}
-                    className="px-4 py-2 text-sm font-medium text-gray-700 bg-gray-100 rounded-md hover:bg-gray-200"
-                  >
-                    Cancel
-                  </button>
-                  <button
-                    onClick={handleFileUpload}
-                    disabled={!uploadFile || !selectedAccount || uploading}
-                    className="px-4 py-2 text-sm font-medium text-white bg-indigo-600 rounded-md hover:bg-indigo-700 disabled:opacity-50"
-                  >
-                    {uploading ? 'Uploading...' : 'Upload'}
-                  </button>
-                </div>
-              </div>
-            </div>
-          </div>
-        )}
       </div>
     </Layout>
   );
