@@ -27,7 +27,7 @@ model Account {
   dividendUploads DividendUpload[]
   holdings        Holding[]
   margins         Margin[]
-  pnlUploads      PnLUpload[]
+  pnlRecords      PnLRecord[]
   snapshots       PortfolioSnapshot[]
   positions       Position[]
   fundTransactions FundTransaction[]
@@ -123,23 +123,9 @@ model Margin {
   @@map("margins")
 }
 
-model PnLUpload {
-  id         Int         @id @default(autoincrement())
-  accountId  Int
-  fileName   String
-  uploadDate DateTime    @default(now())
-  status     String      @default("processing")
-  createdAt  DateTime    @default(now())
-  updatedAt  DateTime    @updatedAt
-  records    PnLRecord[]
-  account    Account     @relation(fields: [accountId], references: [id], onDelete: Cascade)
-
-  @@map("pnl_uploads")
-}
-
 model PnLRecord {
   id                         Int       @id @default(autoincrement())
-  uploadId                   Int
+  accountId                  Int
   instrumentType             String
   symbol                     String?
   isin                       String?
@@ -164,7 +150,7 @@ model PnLRecord {
   stt                        Float?
   createdAt                  DateTime  @default(now())
   updatedAt                  DateTime  @updatedAt
-  upload                     PnLUpload @relation(fields: [uploadId], references: [id], onDelete: Cascade)
+  account                    Account   @relation(fields: [accountId], references: [id], onDelete: Cascade)
 
   @@map("pnl_records")
 }

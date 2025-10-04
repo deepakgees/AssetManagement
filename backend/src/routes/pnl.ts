@@ -58,21 +58,12 @@ router.post('/upload', upload.single('file'), async (req, res) => {
       return res.status(404).json({ error: 'Account not found' });
     }
 
-    // Create upload record
-    const uploadRecord = await prisma.pnLUpload.create({
-      data: {
-        accountId: accountId,
-        fileName: req.file.originalname,
-        status: 'processing'
-      }
-    });
-
     // Process the CSV file asynchronously
-    processCSVFile(req.file.path, uploadRecord.id, accountId, skipDuplicates);
+    processCSVFile(req.file.path, accountId, skipDuplicates);
 
     res.json({ 
       message: 'File uploaded successfully', 
-      uploadId: uploadRecord.id,
+      accountId: accountId,
       status: 'processing'
     });
 
@@ -82,19 +73,45 @@ router.post('/upload', upload.single('file'), async (req, res) => {
   }
 });
 
-// Get all P&L uploads for an account
+// Get P&L records summary for an account
 router.get('/uploads/:accountId', async (req, res) => {
   try {
     const accountId = parseInt(req.params.accountId);
-    const uploads = await prisma.pnLUpload.findMany({
+    
+    // Get records count and summary for the account
+    const records = await prisma.pnLRecord.findMany({
       where: { accountId },
-      orderBy: { uploadDate: 'desc' },
-      include: {
-        _count: {
-          select: { records: true }
-        }
-      }
+      select: {
+        id: true,
+        instrumentType: true,
+        createdAt: true
+      },
+      orderBy: { createdAt: 'desc' }
     });
+
+    // Group by creation date to simulate uploads
+    const groupedRecords = records.reduce((acc: any, record) => {
+      const date = record.createdAt.toISOString().split('T')[0];
+      if (!acc[date]) {
+        acc[date] = {
+          date,
+          records: [],
+          count: 0
+        };
+      }
+      acc[date].records.push(record);
+      acc[date].count++;
+      return acc;
+    }, {});
+
+    const uploads = Object.values(groupedRecords).map((group: any) => ({
+      id: group.date,
+      accountId,
+      fileName: `PnL Records - ${group.date}`,
+      uploadDate: group.date,
+      status: 'completed',
+      _count: { records: group.count }
+    }));
 
     res.json(uploads);
   } catch (error) {
@@ -112,35 +129,17 @@ router.get('/account/:accountId/records', async (req, res) => {
       return res.status(400).json({ error: 'Invalid account ID' });
     }
 
-    // Get all uploads for the account
-    const uploads = await prisma.pnLUpload.findMany({
-      where: { accountId },
-      select: { id: true }
-    });
-
-    if (uploads.length === 0) {
-      return res.json([]);
-    }
-
-    // Get all records from all uploads with account information
+    // Get all records for the account
     const records = await prisma.pnLRecord.findMany({
-      where: {
-        uploadId: {
-          in: uploads.map(upload => upload.id)
-        }
-      },
+      where: { accountId },
       include: {
-        upload: {
-          include: {
-            account: {
-              select: {
-                id: true,
-                name: true,
-                family: true,
-              },
-            },
-          },
-        },
+        account: {
+          select: {
+            id: true,
+            name: true,
+            family: true
+          }
+        }
       },
       orderBy: [
         { entryDate: 'desc' },
@@ -165,18 +164,14 @@ router.get('/family/records', async (req, res) => {
     
     // If familyName is provided, filter by specific family
     if (familyName) {
-      whereClause.upload = {
-        account: {
-          family: familyName as string
-        }
+      whereClause.account = {
+        family: familyName as string
       };
     } else {
       // Get all families
-      whereClause.upload = {
-        account: {
-          family: {
-            not: null
-          }
+      whereClause.account = {
+        family: {
+          not: null
         }
       };
     }
@@ -185,17 +180,13 @@ router.get('/family/records', async (req, res) => {
     const records = await prisma.pnLRecord.findMany({
       where: whereClause,
       include: {
-        upload: {
-          include: {
-            account: {
-              select: {
-                id: true,
-                name: true,
-                family: true,
-              },
-            },
-          },
-        },
+        account: {
+          select: {
+            id: true,
+            name: true,
+            family: true
+          }
+        }
       },
       orderBy: [
         { entryDate: 'desc' },
@@ -207,7 +198,7 @@ router.get('/family/records', async (req, res) => {
     const familyRecords = new Map<string, any>();
     
     records.forEach(record => {
-      const familyKey = record.upload.account?.family || 'Unknown';
+      const familyKey = record.account?.family || 'Unknown';
       const symbolKey = record.symbol || record.isin || 'Unknown';
       const instrumentTypeKey = record.instrumentType;
       const key = `${familyKey}-${symbolKey}-${instrumentTypeKey}`;
@@ -266,12 +257,12 @@ router.get('/family/records', async (req, res) => {
       familyRecord.stt += record.stt || 0;
       
       // Add account information
-      if (record.upload.account) {
-        familyRecord.accountIds.push(record.upload.account.id);
+      if (record.account) {
+        familyRecord.accountIds.push(record.account.id);
         familyRecord.accounts.push({
-          id: record.upload.account.id,
-          name: record.upload.account.name,
-          family: record.upload.account.family,
+          id: record.account.id,
+          name: record.account.name,
+          family: record.account.family,
         });
       }
     });
@@ -302,18 +293,14 @@ router.get('/family/summary', async (req, res) => {
     
     // If familyName is provided, filter by specific family
     if (familyName) {
-      whereClause.upload = {
-        account: {
-          family: familyName as string
-        }
+      whereClause.account = {
+        family: familyName as string
       };
     } else {
       // Get all families
-      whereClause.upload = {
-        account: {
-          family: {
-            not: null
-          }
+      whereClause.account = {
+        family: {
+          not: null
         }
       };
     }
@@ -353,14 +340,14 @@ router.get('/family/summary', async (req, res) => {
 });
 
 // Get records by upload ID and instrument type
-router.get('/records/:uploadId/:instrumentType', async (req, res) => {
+router.get('/records/:accountId/:instrumentType', async (req, res) => {
   try {
-    const uploadId = parseInt(req.params.uploadId);
+    const accountId = parseInt(req.params.accountId);
     const instrumentType = req.params.instrumentType;
 
     const records = await prisma.pnLRecord.findMany({
       where: {
-        uploadId: uploadId,
+        accountId: accountId,
         instrumentType: instrumentType
       },
       orderBy: { entryDate: 'desc' }
@@ -373,14 +360,14 @@ router.get('/records/:uploadId/:instrumentType', async (req, res) => {
   }
 });
 
-// Get summary by instrument type for an upload
-router.get('/summary/:uploadId', async (req, res) => {
+// Get summary by instrument type for an account
+router.get('/summary/:accountId', async (req, res) => {
   try {
-    const uploadId = parseInt(req.params.uploadId);
+    const accountId = parseInt(req.params.accountId);
 
     const summary = await prisma.pnLRecord.groupBy({
       by: ['instrumentType'],
-      where: { uploadId },
+      where: { accountId },
       _sum: {
         profit: true,
         buyValue: true,
@@ -412,21 +399,8 @@ router.post('/check-duplicates/:accountId', async (req, res) => {
     }
 
     // Get all existing records for this account
-    const uploads = await prisma.pnLUpload.findMany({
-      where: { accountId },
-      select: { id: true }
-    });
-
-    if (uploads.length === 0) {
-      return res.json({ duplicates: [], totalRecords: records.length, duplicateCount: 0 });
-    }
-
     const existingRecords = await prisma.pnLRecord.findMany({
-      where: {
-        uploadId: {
-          in: uploads.map(upload => upload.id)
-        }
-      },
+      where: { accountId },
       select: {
         symbol: true,
         instrumentType: true,
@@ -465,23 +439,38 @@ router.post('/check-duplicates/:accountId', async (req, res) => {
   }
 });
 
-// Delete P&L upload and all its records
-router.delete('/upload/:uploadId', async (req, res) => {
+// Delete P&L records by date (simulating upload deletion)
+router.delete('/upload/:date', async (req, res) => {
   try {
-    const uploadId = parseInt(req.params.uploadId);
+    const date = req.params.date;
+    const accountId = parseInt(req.query.accountId as string);
 
-    await prisma.pnLRecord.deleteMany({
-      where: { uploadId }
+    if (!accountId) {
+      return res.status(400).json({ error: 'Account ID is required' });
+    }
+
+    // Delete records created on the specified date for the account
+    const startDate = new Date(date);
+    const endDate = new Date(date);
+    endDate.setDate(endDate.getDate() + 1);
+
+    const deletedRecords = await prisma.pnLRecord.deleteMany({
+      where: {
+        accountId,
+        createdAt: {
+          gte: startDate,
+          lt: endDate
+        }
+      }
     });
 
-    await prisma.pnLUpload.delete({
-      where: { id: uploadId }
+    res.json({ 
+      message: 'Records deleted successfully',
+      deletedCount: deletedRecords.count
     });
-
-    res.json({ message: 'Upload deleted successfully' });
   } catch (error) {
     serviceLogger.logServiceError('PnL', 'deleteUpload', error);
-    res.status(500).json({ error: 'Failed to delete upload' });
+    res.status(500).json({ error: 'Failed to delete records' });
   }
 });
 
@@ -510,32 +499,24 @@ router.post('/parse-and-check-duplicates/:accountId', upload.single('file'), asy
     const parsedRecords = await parseCSVFileForDuplicates(req.file.path);
     
     // Get all existing records for this account
-    const uploads = await prisma.pnLUpload.findMany({
+    const existingRecords = await prisma.pnLRecord.findMany({
       where: { accountId },
-      select: { id: true }
+      select: {
+        symbol: true,
+        instrumentType: true,
+        entryDate: true,
+        exitDate: true,
+        quantity: true,
+        buyValue: true,
+        sellValue: true,
+        profit: true
+      }
     });
 
     let duplicates: any[] = [];
     let totalRecords = parsedRecords.length;
 
-    if (uploads.length > 0) {
-      const existingRecords = await prisma.pnLRecord.findMany({
-        where: {
-          uploadId: {
-            in: uploads.map(upload => upload.id)
-          }
-        },
-        select: {
-          symbol: true,
-          instrumentType: true,
-          entryDate: true,
-          exitDate: true,
-          quantity: true,
-          buyValue: true,
-          sellValue: true,
-          profit: true
-        }
-      });
+    if (existingRecords.length > 0) {
 
       // Check for duplicates
       duplicates = parsedRecords.filter(record => {
@@ -569,7 +550,7 @@ router.post('/parse-and-check-duplicates/:accountId', upload.single('file'), asy
 });
 
 // Function to process CSV file
-async function processCSVFile(filePath: string, uploadId: number, accountId: number, skipDuplicates: boolean = false) {
+async function processCSVFile(filePath: string, accountId: number, skipDuplicates: boolean = false) {
   try {
     const results: any[] = [];
     let currentInstrumentType = '';
@@ -630,7 +611,7 @@ async function processCSVFile(filePath: string, uploadId: number, accountId: num
 
         // Create record object
         const record: any = {
-          uploadId,
+          accountId,
           instrumentType: currentInstrumentType
         };
 
@@ -722,30 +703,21 @@ async function processCSVFile(filePath: string, uploadId: number, accountId: num
         
         if (skipDuplicates) {
           // Get existing records to filter out duplicates before insertion
-          const uploads = await prisma.pnLUpload.findMany({
+          const existingRecords = await prisma.pnLRecord.findMany({
             where: { accountId },
-            select: { id: true }
+            select: {
+              symbol: true,
+              instrumentType: true,
+              entryDate: true,
+              exitDate: true,
+              quantity: true,
+              buyValue: true,
+              sellValue: true,
+              profit: true
+            }
           });
 
-          if (uploads.length > 0) {
-            const existingRecords = await prisma.pnLRecord.findMany({
-              where: {
-                uploadId: {
-                  in: uploads.map(upload => upload.id)
-                }
-              },
-              select: {
-                symbol: true,
-                instrumentType: true,
-                entryDate: true,
-                exitDate: true,
-                quantity: true,
-                buyValue: true,
-                sellValue: true,
-                profit: true
-              }
-            });
-
+          if (existingRecords.length > 0) {
             // Filter out duplicates
             const uniqueRecords = results.filter(record => {
               return !existingRecords.some(existing => 
@@ -800,32 +772,16 @@ async function processCSVFile(filePath: string, uploadId: number, accountId: num
         serviceLogger.logServiceOperation('PnL', 'processCSVFile', `Inserted ${insertedCount} new records, skipped ${skippedCount} duplicates`);
       }
 
-      // Update upload status
-      await prisma.pnLUpload.update({
-        where: { id: uploadId },
-        data: { status: 'completed' }
-      });
-
       // Clean up the uploaded file
       fs.unlinkSync(filePath);
 
       serviceLogger.logServiceOperation('PnL', 'processCSVFile', `Successfully processed CSV file with ${results.length} records`);
     } catch (dbError) {
       serviceLogger.logServiceError('PnL', 'saveRecords', dbError);
-      
-      await prisma.pnLUpload.update({
-        where: { id: uploadId },
-        data: { status: 'failed' }
-      });
     }
 
   } catch (error) {
     serviceLogger.logServiceError('PnL', 'processCSVFile', error);
-    
-    await prisma.pnLUpload.update({
-      where: { id: uploadId },
-      data: { status: 'failed' }
-    });
   }
 }
 

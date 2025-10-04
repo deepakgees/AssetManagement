@@ -17,7 +17,7 @@ export interface PnLUpload {
 
 export interface PnLRecord {
   id: number;
-  uploadId: number;
+  accountId: number;
   instrumentType: string;
   symbol?: string;
   isin?: string;
@@ -42,12 +42,10 @@ export interface PnLRecord {
   stt?: number;
   createdAt: string;
   updatedAt: string;
-  upload?: {
-    account?: {
-      id: number;
-      name: string;
-      family?: string;
-    };
+  account?: {
+    id: number;
+    name: string;
+    family?: string;
   };
 }
 
@@ -88,7 +86,7 @@ class PnLService {
   }
 
   // Upload P&L CSV file
-  async uploadFile(file: File, accountId: number, skipDuplicates: boolean = false): Promise<{ message: string; uploadId: number; status: string }> {
+  async uploadFile(file: File, accountId: number, skipDuplicates: boolean = false): Promise<{ message: string; accountId: number; status: string }> {
     const formData = new FormData();
     formData.append('file', file);
     formData.append('accountId', accountId.toString());
@@ -135,21 +133,21 @@ class PnLService {
     return response.data;
   }
 
-  // Get P&L records by instrument type
-  async getRecords(uploadId: number, instrumentType: string): Promise<PnLRecord[]> {
-    const response = await axios.get(`${API_BASE_URL}/pnl/records/${uploadId}/${encodeURIComponent(instrumentType)}`);
+  // Get P&L records by instrument type for an account
+  async getRecords(accountId: number, instrumentType: string): Promise<PnLRecord[]> {
+    const response = await axios.get(`${API_BASE_URL}/pnl/records/${accountId}/${encodeURIComponent(instrumentType)}`);
     return response.data;
   }
 
-  // Get summary by instrument type for an upload
-  async getSummary(uploadId: number): Promise<PnLSummary[]> {
-    const response = await axios.get(`${API_BASE_URL}/pnl/summary/${uploadId}`);
+  // Get summary by instrument type for an account
+  async getSummary(accountId: number): Promise<PnLSummary[]> {
+    const response = await axios.get(`${API_BASE_URL}/pnl/summary/${accountId}`);
     return response.data;
   }
 
-  // Delete P&L upload
-  async deleteUpload(uploadId: number): Promise<{ message: string }> {
-    const response = await axios.delete(`${API_BASE_URL}/pnl/upload/${uploadId}`);
+  // Delete P&L records by date
+  async deleteUpload(date: string, accountId: number): Promise<{ message: string; deletedCount: number }> {
+    const response = await axios.delete(`${API_BASE_URL}/pnl/upload/${date}?accountId=${accountId}`);
     return response.data;
   }
 }
