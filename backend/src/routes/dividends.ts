@@ -41,22 +41,13 @@ router.post('/upload/:accountId', upload.single('file'), async (req, res) => {
 
     const skipDuplicates = req.body.skipDuplicates === 'true';
 
-    // Create dividend upload record
-    const dividendUpload = await prisma.dividendUpload.create({
-      data: {
-        accountId,
-        fileName: file.originalname,
-        status: 'processing'
-      }
-    });
-
     // Process the file asynchronously
-    processDividendCSVFile(file.path, dividendUpload.id, accountId, skipDuplicates);
+    processDividendCSVFile(file.path, accountId, skipDuplicates);
 
     serviceLogger.logServiceOperation('Dividend', 'upload', `Started processing dividend file: ${file.originalname}`);
     res.json({ 
       message: 'Dividend file uploaded successfully', 
-      uploadId: dividendUpload.id 
+      accountId: accountId 
     });
 
   } catch (error) {
@@ -65,7 +56,7 @@ router.post('/upload/:accountId', upload.single('file'), async (req, res) => {
   }
 });
 
-// Get all dividend uploads for an account
+// Get dividend records summary for an account
 router.get('/uploads/:accountId', async (req, res) => {
   try {
     const accountId = parseInt(req.params.accountId);
@@ -74,10 +65,40 @@ router.get('/uploads/:accountId', async (req, res) => {
       return res.status(400).json({ error: 'Invalid account ID' });
     }
 
-    const uploads = await prisma.dividendUpload.findMany({
+    // Get records count and summary for the account
+    const records = await prisma.dividendRecord.findMany({
       where: { accountId },
-      orderBy: { uploadDate: 'desc' }
+      select: {
+        id: true,
+        symbol: true,
+        createdAt: true
+      },
+      orderBy: { createdAt: 'desc' }
     });
+
+    // Group by creation date to simulate uploads
+    const groupedRecords = records.reduce((acc: any, record) => {
+      const date = record.createdAt.toISOString().split('T')[0];
+      if (!acc[date]) {
+        acc[date] = {
+          date,
+          records: [],
+          count: 0
+        };
+      }
+      acc[date].records.push(record);
+      acc[date].count++;
+      return acc;
+    }, {});
+
+    const uploads = Object.values(groupedRecords).map((group: any) => ({
+      id: group.date,
+      accountId,
+      fileName: `Dividend Records - ${group.date}`,
+      uploadDate: group.date,
+      status: 'completed',
+      _count: { records: group.count }
+    }));
 
     serviceLogger.logServiceOperation('Dividend', 'getUploads', `Retrieved ${uploads.length} dividend uploads for account ${accountId}`);
     res.json(uploads);
@@ -96,35 +117,17 @@ router.get('/account/:accountId/records', async (req, res) => {
       return res.status(400).json({ error: 'Invalid account ID' });
     }
 
-    // Get all uploads for the account
-    const uploads = await prisma.dividendUpload.findMany({
-      where: { accountId },
-      select: { id: true }
-    });
-
-    if (uploads.length === 0) {
-      return res.json([]);
-    }
-
-    // Get all records from all uploads with account information
+    // Get all records for the account
     const records = await prisma.dividendRecord.findMany({
-      where: {
-        uploadId: {
-          in: uploads.map(upload => upload.id)
-        }
-      },
+      where: { accountId },
       include: {
-        upload: {
-          include: {
-            account: {
-              select: {
-                id: true,
-                name: true,
-                family: true,
-              },
-            },
-          },
-        },
+        account: {
+          select: {
+            id: true,
+            name: true,
+            family: true
+          }
+        }
       },
       orderBy: [
         { exDate: 'desc' },
@@ -140,24 +143,38 @@ router.get('/account/:accountId/records', async (req, res) => {
   }
 });
 
-// Delete dividend upload
-router.delete('/upload/:uploadId', async (req, res) => {
+// Delete dividend records by date (simulating upload deletion)
+router.delete('/upload/:date', async (req, res) => {
   try {
-    const uploadId = parseInt(req.params.uploadId);
+    const date = req.params.date;
+    const accountId = parseInt(req.query.accountId as string);
 
-    if (isNaN(uploadId)) {
-      return res.status(400).json({ error: 'Invalid upload ID' });
+    if (!accountId) {
+      return res.status(400).json({ error: 'Account ID is required' });
     }
 
-    await prisma.dividendUpload.delete({
-      where: { id: uploadId }
+    // Delete records created on the specified date for the account
+    const startDate = new Date(date);
+    const endDate = new Date(date);
+    endDate.setDate(endDate.getDate() + 1);
+
+    const deletedRecords = await prisma.dividendRecord.deleteMany({
+      where: {
+        accountId,
+        createdAt: {
+          gte: startDate,
+          lt: endDate
+        }
+      }
     });
 
-    serviceLogger.logServiceOperation('Dividend', 'deleteUpload', `Deleted dividend upload ${uploadId}`);
-    res.json({ message: 'Dividend upload deleted successfully' });
+    res.json({ 
+      message: 'Records deleted successfully',
+      deletedCount: deletedRecords.count
+    });
   } catch (error) {
     serviceLogger.logServiceError('Dividend', 'deleteUpload', error);
-    res.status(500).json({ error: 'Failed to delete dividend upload' });
+    res.status(500).json({ error: 'Failed to delete records' });
   }
 });
 
@@ -172,21 +189,8 @@ router.post('/check-duplicates/:accountId', async (req, res) => {
     }
 
     // Get all existing records for this account
-    const uploads = await prisma.dividendUpload.findMany({
-      where: { accountId },
-      select: { id: true }
-    });
-
-    if (uploads.length === 0) {
-      return res.json({ duplicates: [], totalRecords: records.length, duplicateCount: 0 });
-    }
-
     const existingRecords = await prisma.dividendRecord.findMany({
-      where: {
-        uploadId: {
-          in: uploads.map(upload => upload.id)
-        }
-      },
+      where: { accountId },
       select: {
         symbol: true,
         isin: true,
@@ -284,30 +288,22 @@ router.post('/parse-and-check-duplicates/:accountId', upload.single('file'), asy
     const parsedRecords = await parseDividendCSVFileForDuplicates(req.file.path);
     
     // Get all existing records for this account
-    const uploads = await prisma.dividendUpload.findMany({
+    const existingRecords = await prisma.dividendRecord.findMany({
       where: { accountId },
-      select: { id: true }
+      select: {
+        symbol: true,
+        isin: true,
+        exDate: true,
+        quantity: true,
+        dividendPerShare: true,
+        netDividendAmount: true
+      }
     });
 
     let duplicates: any[] = [];
     let totalRecords = parsedRecords.length;
 
-    if (uploads.length > 0) {
-      const existingRecords = await prisma.dividendRecord.findMany({
-        where: {
-          uploadId: {
-            in: uploads.map(upload => upload.id)
-          }
-        },
-        select: {
-          symbol: true,
-          isin: true,
-          exDate: true,
-          quantity: true,
-          dividendPerShare: true,
-          netDividendAmount: true
-        }
-      });
+    if (existingRecords.length > 0) {
 
       // Check for duplicates
       duplicates = parsedRecords.filter(record => {
@@ -461,7 +457,7 @@ async function parseDividendCSVFileForDuplicates(filePath: string): Promise<any[
 }
 
 // Process dividend CSV file
-async function processDividendCSVFile(filePath: string, uploadId: number, accountId: number, skipDuplicates: boolean = false) {
+async function processDividendCSVFile(filePath: string, accountId: number, skipDuplicates: boolean = false) {
   try {
     const results: any[] = [];
     let headers: string[] = [];
@@ -539,7 +535,7 @@ async function processDividendCSVFile(filePath: string, uploadId: number, accoun
 
         // Create record object
         const record: any = {
-          uploadId,
+          accountId,
         };
 
         // Map values to record fields
@@ -590,27 +586,19 @@ async function processDividendCSVFile(filePath: string, uploadId: number, accoun
       
       if (skipDuplicates) {
         // Get existing records to filter out duplicates before insertion
-        const uploads = await prisma.dividendUpload.findMany({
+        const existingRecords = await prisma.dividendRecord.findMany({
           where: { accountId },
-          select: { id: true }
+          select: {
+            symbol: true,
+            isin: true,
+            exDate: true,
+            quantity: true,
+            dividendPerShare: true,
+            netDividendAmount: true
+          }
         });
 
-        if (uploads.length > 0) {
-          const existingRecords = await prisma.dividendRecord.findMany({
-            where: {
-              uploadId: {
-                in: uploads.map(upload => upload.id)
-              }
-            },
-            select: {
-              symbol: true,
-              isin: true,
-              exDate: true,
-              quantity: true,
-              dividendPerShare: true,
-              netDividendAmount: true
-            }
-          });
+        if (existingRecords.length > 0) {
 
           // Filter out duplicates
           const uniqueRecords = results.filter(record => {
@@ -666,19 +654,12 @@ async function processDividendCSVFile(filePath: string, uploadId: number, accoun
       serviceLogger.logServiceOperation('Dividend', 'processCSVFile', `No valid records found to insert`);
     }
 
-    // Update upload status
-    await prisma.dividendUpload.update({
-      where: { id: uploadId },
-      data: { status: 'completed' }
-    });
-
     // Clean up the uploaded file
     fs.unlinkSync(filePath);
 
     serviceLogger.logServiceOperation('Dividend', 'processCSVFile', `Successfully processed dividend CSV file with ${results.length} records`);
   } catch (error) {
     serviceLogger.logServiceError('Dividend', 'processCSVFile', error);
-    await prisma.dividendUpload.update({ where: { id: uploadId }, data: { status: 'failed' } });
     
     // Clean up the uploaded file even if processing failed
     try {

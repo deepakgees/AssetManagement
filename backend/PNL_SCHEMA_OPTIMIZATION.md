@@ -1,32 +1,35 @@
-# PnL Schema Optimization
+# Database Schema Optimization
 
 ## Overview
-This optimization removes the `pnl_uploads` table and stores the `accountId` directly in the `pnl_records` table, simplifying the database structure and improving performance.
+This optimization removes the `pnl_uploads` and `dividend_uploads` tables and stores the `accountId` directly in the `pnl_records` and `dividend_records` tables, simplifying the database structure and improving performance.
 
 ## Changes Made
 
 ### Database Schema Changes
-1. **Removed `pnl_uploads` table** - No longer needed as upload metadata is not critical
-2. **Added `accountId` to `pnl_records`** - Direct relationship to accounts
-3. **Updated foreign key relationships** - `pnl_records` now directly references `accounts`
+1. **Removed `pnl_uploads` and `dividend_uploads` tables** - No longer needed as upload metadata is not critical
+2. **Added `accountId` to `pnl_records` and `dividend_records`** - Direct relationship to accounts
+3. **Updated foreign key relationships** - Both record tables now directly reference `accounts`
 
 ### Backend Changes
-1. **Updated Prisma schema** - Removed `PnLUpload` model, updated `PnLRecord` model
-2. **Modified PnL routes** - Updated all routes to work with new schema
+1. **Updated Prisma schema** - Removed `PnLUpload` and `DividendUpload` models, updated record models
+2. **Modified PnL and Dividend routes** - Updated all routes to work with new schema
 3. **Simplified upload process** - No longer creates upload records, directly processes CSV
 4. **Updated duplicate checking** - Now checks against account records directly
 
 ### Frontend Changes
-1. **Updated TypeScript interfaces** - `PnLRecord` now has `accountId` instead of `uploadId`
+1. **Updated TypeScript interfaces** - Both `PnLRecord` and `DividendRecord` now have `accountId` instead of `uploadId`
 2. **Modified service methods** - Updated to work with new API responses
 3. **Updated delete functionality** - Now deletes by date instead of upload ID
 
 ## Migration Steps
 
-### 1. Run Database Migration
+### 1. Run Database Migrations
 ```bash
-# Run the migration script
+# Run the PnL migration script
 psql -d your_database -f backend/scripts/migrate-pnl-schema.sql
+
+# Run the dividend migration script
+psql -d your_database -f backend/scripts/migrate-dividend-schema.sql
 ```
 
 ### 2. Regenerate Prisma Client

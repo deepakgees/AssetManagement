@@ -24,7 +24,7 @@ model Account {
   isActive        Boolean             @default(true)
   requestToken    String?
   totpSecret      String?
-  dividendUploads DividendUpload[]
+  dividendRecords DividendRecord[]
   holdings        Holding[]
   margins         Margin[]
   pnlRecords      PnLRecord[]
@@ -155,23 +155,9 @@ model PnLRecord {
   @@map("pnl_records")
 }
 
-model DividendUpload {
-  id         Int              @id @default(autoincrement())
-  accountId  Int
-  fileName   String
-  uploadDate DateTime         @default(now())
-  status     String           @default("processing")
-  createdAt  DateTime         @default(now())
-  updatedAt  DateTime         @updatedAt
-  records    DividendRecord[]
-  account    Account          @relation(fields: [accountId], references: [id], onDelete: Cascade)
-
-  @@map("dividend_uploads")
-}
-
 model DividendRecord {
   id                Int            @id @default(autoincrement())
-  uploadId          Int
+  accountId         Int
   symbol            String?
   isin              String?
   exDate            DateTime?
@@ -180,9 +166,9 @@ model DividendRecord {
   netDividendAmount Float?
   createdAt         DateTime       @default(now())
   updatedAt         DateTime       @updatedAt
-  upload            DividendUpload @relation(fields: [uploadId], references: [id], onDelete: Cascade)
+  account           Account        @relation(fields: [accountId], references: [id], onDelete: Cascade)
 
-  @@unique([uploadId, symbol, isin, exDate, quantity, dividendPerShare, netDividendAmount], name: "unique_dividend_record")
+  @@unique([accountId, symbol, isin, exDate, quantity, dividendPerShare, netDividendAmount], name: "unique_dividend_record")
   @@map("dividend_records")
 }
 

@@ -14,7 +14,7 @@ export interface DividendUpload {
 
 export interface DividendRecord {
   id: number;
-  uploadId: number;
+  accountId: number;
   symbol: string | null;
   isin: string | null;
   exDate: string | null;
@@ -23,6 +23,11 @@ export interface DividendRecord {
   netDividendAmount: number | null;
   createdAt: string;
   updatedAt: string;
+  account?: {
+    id: number;
+    name: string;
+    family?: string;
+  };
 }
 
 class DividendService {
@@ -73,9 +78,9 @@ class DividendService {
     return response.data;
   }
 
-  // Delete upload
-  async deleteUpload(uploadId: number): Promise<any> {
-    const response = await axios.delete(`${API_BASE_URL}/dividends/upload/${uploadId}`);
+  // Delete dividend records by date
+  async deleteUpload(date: string, accountId: number): Promise<{ message: string; deletedCount: number }> {
+    const response = await axios.delete(`${API_BASE_URL}/dividends/upload/${date}?accountId=${accountId}`);
     return response.data;
   }
 }
