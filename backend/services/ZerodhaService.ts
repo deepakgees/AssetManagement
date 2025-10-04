@@ -339,15 +339,27 @@ export async function syncPositions(existingAccount: any) {
         console.log('Fetching positions for account:', existingAccount.id);
         const positionsResponse = await kc!.getPositions();
         
+        // Debug: Log all position symbols to understand what we're getting
+        console.log('🔍 Debug - All net position symbols:', positionsResponse.net?.map((p: any) => p.tradingsymbol) || []);
+       
         let positionsData: any[] = [];
 
         // Handle the Zerodha API response structure: { day: [], net: [] }
         // We'll use the 'net' array which contains the consolidated positions
         const netPositions = positionsResponse.net || [];
-        const dayPositions = positionsResponse.day || [];
-
+       
         // Process net positions (overnight + day positions combined)
-        positionsData = netPositions.map((position: any) => {
+        // Filter out positions ending with "_Day" (case-insensitive)
+        const filteredNetPositions = netPositions.filter((position: any) => {
+            const tradingSymbol = String(position.tradingsymbol || '');
+            const shouldFilter = tradingSymbol.toLowerCase().endsWith('_day');
+            if (shouldFilter) {
+                console.log(`🚫 Filtering out net position: ${tradingSymbol}`);
+            }
+            return !shouldFilter;
+        });
+
+        positionsData = filteredNetPositions.map((position: any) => {
             const quantity = Math.round(position.quantity || 0); // Convert to integer
             const averagePrice = parseFloat(position.average_price || 0);
             const lastPrice = parseFloat(position.last_price || 0);
@@ -372,34 +384,7 @@ export async function syncPositions(existingAccount: any) {
             };
         });
 
-        // Also process day positions if they exist and add them separately
-        const dayPositionsData = dayPositions.map((position: any) => {
-            const quantity = Math.round(position.quantity || 0); // Convert to integer
-            const averagePrice = parseFloat(position.average_price || 0);
-            const lastPrice = parseFloat(position.last_price || 0);
-            const marketValue = parseFloat(position.value || 0);
-            const pnl = parseFloat(position.pnl || 0);
-            
-            return {
-                tradingSymbol: String(position.tradingsymbol || '') + '_DAY',
-                exchange: String(position.exchange || ''),
-                quantity: quantity,
-                averagePrice: averagePrice,
-                lastPrice: lastPrice,
-                marketValue: marketValue,
-                pnl: pnl,
-                pnlPercentage: pnl && marketValue ? 
-                    parseFloat(((pnl / Math.abs(marketValue)) * 100).toFixed(2)) : 0,
-                product: String(position.product || 'UNKNOWN'),
-                side: quantity > 0 ? 'BUY' : quantity < 0 ? 'SELL' : 'NONE',
-                accountId: existingAccount.id,
-                createdAt: new Date(),
-                updatedAt: new Date(),
-            };
-        });
-
-        // Combine both net and day positions
-        const allPositions = [...positionsData, ...dayPositionsData];
+        const allPositions = [...positionsData];
 
         // Clear existing positions for this account
         await Promise.all([      
@@ -411,6 +396,7 @@ export async function syncPositions(existingAccount: any) {
         // Insert new positions 
             try {
                 console.log('Sample position data being inserted:', allPositions[0]);
+                console.log('🔍 Debug - All positions being inserted:', allPositions.map(p => p.tradingSymbol));
                 await Promise.all([      
                     prisma.position.createMany({
                         data: allPositions
@@ -424,7 +410,7 @@ export async function syncPositions(existingAccount: any) {
             }
         
 
-        console.log(`Successfully synced ${netPositions.length} net positions and ${dayPositions.length} day positions for account ${existingAccount.id}`);        
+        console.log(`Successfully synced ${filteredNetPositions.length} net positions for account ${existingAccount.id} (skipped all day positions)`);        
         return positionsResponse;
     }, existingAccount);
 }

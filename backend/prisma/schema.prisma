@@ -30,6 +30,7 @@ model Account {
   pnlUploads      PnLUpload[]
   snapshots       PortfolioSnapshot[]
   positions       Position[]
+  fundTransactions FundTransaction[]
 
   @@map("accounts")
 }
@@ -208,4 +209,18 @@ model SymbolAndMargin {
 
   @@unique([symbolPrefix], name: "unique_symbol_prefix")
   @@map("symbol_and_margins")
+}
+
+model FundTransaction {
+  id          Int      @id @default(autoincrement())
+  accountId   Int
+  transactionDate DateTime
+  amount      Float
+  type        String   // 'ADDITION' or 'WITHDRAWAL'
+  description String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  account     Account  @relation(fields: [accountId], references: [id], onDelete: Cascade)
+
+  @@map("fund_transactions")
 }
