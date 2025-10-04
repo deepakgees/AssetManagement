@@ -1161,12 +1161,21 @@ const PnL: React.FC = () => {
 
 
                 {/* P&L Chart */}
-                {filteredRecords.length > 0 && (
+                {filteredRecords.length > 0 ? (
                   <div className="bg-white shadow overflow-hidden sm:rounded-lg">
                     <div className="px-4 py-5 sm:p-6">
                       <h3 className="text-lg font-medium text-gray-900 mb-4">P&L Chart</h3>
-                      <div className="h-96">
+                      <div className="h-96 w-full">
                         <PnLChart records={filteredRecords} />
+                      </div>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="bg-white shadow overflow-hidden sm:rounded-lg">
+                    <div className="px-4 py-5 sm:p-6">
+                      <h3 className="text-lg font-medium text-gray-900 mb-4">P&L Chart</h3>
+                      <div className="text-center text-gray-500 py-8">
+                        No P&L records available to display chart
                       </div>
                     </div>
                   </div>

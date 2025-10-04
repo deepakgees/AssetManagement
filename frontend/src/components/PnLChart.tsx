@@ -81,8 +81,13 @@ const PnLChart: React.FC<PnLChartProps> = ({ records }) => {
           getFinancialYear(record.exitDate) === year
         );
         
-        return yearRecords.reduce((sum, record) => sum + (record.profit || 0), 0);
+        const total = yearRecords.reduce((sum, record) => sum + (record.profit || 0), 0);
+        console.log(`Year ${year}: ${yearRecords.length} records, Total: ${total}`);
+        return total;
       });
+
+      console.log('Consolidated data:', consolidatedData);
+      console.log('Financial years:', financialYears);
 
       return [{
         label: 'All Types',
@@ -92,6 +97,11 @@ const PnLChart: React.FC<PnLChartProps> = ({ records }) => {
         borderWidth: 3,
         fill: false,
         tension: 0.1,
+        pointRadius: 6,
+        pointHoverRadius: 8,
+        pointBackgroundColor: '#1F2937',
+        pointBorderColor: '#ffffff',
+        pointBorderWidth: 2,
       }];
     } else {
       // Show individual instrument type lines
@@ -113,12 +123,22 @@ const PnLChart: React.FC<PnLChartProps> = ({ records }) => {
           borderWidth: 2,
           fill: false,
           tension: 0.1,
+          pointRadius: 4,
+          pointHoverRadius: 6,
         };
       });
     }
   };
 
   const datasets = generateDatasets();
+
+  // Ensure we have at least some data points
+  const hasData = datasets.some(dataset => 
+    dataset.data.some(value => value !== 0)
+  );
+
+  console.log('Has data:', hasData);
+  console.log('Datasets:', datasets);
 
   const chartData = {
     labels: financialYears,
@@ -127,6 +147,7 @@ const PnLChart: React.FC<PnLChartProps> = ({ records }) => {
 
   const options = {
     responsive: true,
+    maintainAspectRatio: false,
     plugins: {
       legend: {
         position: 'top' as const,
@@ -154,35 +175,106 @@ const PnLChart: React.FC<PnLChartProps> = ({ records }) => {
     },
     scales: {
       x: {
+        display: true,
         title: {
           display: true,
           text: 'Financial Year',
+          font: {
+            size: 12,
+            weight: 'bold' as const,
+          },
+        },
+        ticks: {
+          display: true,
+          maxRotation: 45,
+          minRotation: 0,
         },
       },
       y: {
+        display: true,
         title: {
           display: true,
           text: 'Profit/Loss (₹)',
+          font: {
+            size: 12,
+            weight: 'bold' as const,
+          },
         },
         ticks: {
+          display: true,
           callback: function(value: any) {
             return '₹' + value.toLocaleString('en-IN');
           },
         },
+        grid: {
+          display: true,
+        },
+        beginAtZero: false,
+        grace: '10%',
       },
     },
     interaction: {
       intersect: false,
       mode: 'index' as const,
     },
+    elements: {
+      point: {
+        radius: 4,
+        hoverRadius: 6,
+      },
+      line: {
+        tension: 0.1,
+      },
+    },
   };
 
-  if (financialYears.length === 0 || instrumentTypes.length === 0) {
+  // Debug logging
+  console.log('PnLChart Debug:', {
+    records: records.length,
+    financialYears,
+    instrumentTypes,
+    showConsolidated
+  });
+
+  if (!records || records.length === 0) {
     return (
       <div className="bg-white p-6 rounded-lg shadow">
         <h3 className="text-lg font-medium text-gray-900 mb-4">Profit/Loss Trend</h3>
         <div className="text-center text-gray-500 py-8">
-          No data available for chart visualization
+          No P&L records available for chart visualization
+        </div>
+      </div>
+    );
+  }
+
+  if (financialYears.length === 0) {
+    return (
+      <div className="bg-white p-6 rounded-lg shadow">
+        <h3 className="text-lg font-medium text-gray-900 mb-4">Profit/Loss Trend</h3>
+        <div className="text-center text-gray-500 py-8">
+          No valid financial years found in the data
+        </div>
+      </div>
+    );
+  }
+
+  if (instrumentTypes.length === 0 && !showConsolidated) {
+    return (
+      <div className="bg-white p-6 rounded-lg shadow">
+        <h3 className="text-lg font-medium text-gray-900 mb-4">Profit/Loss Trend</h3>
+        <div className="text-center text-gray-500 py-8">
+          No instrument types found. Please switch to "Consolidated" view.
+        </div>
+      </div>
+    );
+  }
+
+  if (!hasData) {
+    return (
+      <div className="bg-white p-6 rounded-lg shadow">
+        <h3 className="text-lg font-medium text-gray-900 mb-4">Profit/Loss Trend</h3>
+        <div className="text-center text-gray-500 py-8">
+          No profit/loss data available for the selected period. All values are zero.
         </div>
       </div>
     );
