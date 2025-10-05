@@ -858,58 +858,195 @@ export default function Positions() {
                 <p className="mt-2 text-gray-500">Connecting to Zerodha...</p>
               </div>
             ) : activeMonthTab === 'Overview' ? (
-              // Overview Tab - Show month cards
+              // Overview Tab - Show month rows with account cards
               <div className="p-6">
-                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
-                  {getAvailableMonths().filter(month => month !== 'Overview').map((month) => {
-                    const monthPositions = familyView 
-                      ? (groupedFamilyPositions?.[month] || [])
-                      : (groupedPositions?.[month] || []);
-                    const totalMarketValue = monthPositions.reduce((sum, pos) => sum + pos.marketValue, 0);
-                    const totalPnL = monthPositions.reduce((sum, pos) => sum + pos.pnl, 0);
-                    
-                    if (monthPositions.length === 0) return null;
-                    
-                    return (
-                      <div key={month} className="bg-white border border-gray-200 rounded-lg shadow-sm p-4 hover:shadow-md transition-shadow">
-                        <div className="flex items-center justify-between mb-3">
-                          <div className="flex items-center space-x-2">
-                            <CalendarIcon className="h-5 w-5 text-gray-600" />
-                            <h3 className="text-lg font-semibold text-gray-900">{month}</h3>
-                          </div>
-                          <span className="text-xs bg-gray-100 text-gray-600 px-2 py-1 rounded-full">
+                {getAvailableMonths().filter(month => month !== 'Overview').map((month) => {
+                  const monthPositions = familyView 
+                    ? (groupedFamilyPositions?.[month] || [])
+                    : (groupedPositions?.[month] || []);
+                  
+                  if (monthPositions.length === 0) return null;
+                  
+                  // Group positions by account for this month
+                  const accountGroups = new Map<string, { 
+                    account: any; 
+                    positions: any[]; 
+                    totalMarketValue: number; 
+                    totalPnL: number;
+                    exchangeBreakdown: { [exchange: string]: number };
+                    marginUsed: number;
+                    marginAvailable: number;
+                  }>();
+                  
+                  monthPositions.forEach(position => {
+                    if (position.accounts) {
+                      // Family view - group by individual accounts
+                      position.accounts.forEach((account: any) => {
+                        const accountKey = `${account.name}-${account.family}`;
+                        if (!accountGroups.has(accountKey)) {
+                          // Get margin information for this account
+                          const accountMarginUsed = getUsedMargin(account.id);
+                          const accountMarginAvailable = calculateCustomMargin(account.id);
+                          
+                          accountGroups.set(accountKey, {
+                            account,
+                            positions: [],
+                            totalMarketValue: 0,
+                            totalPnL: 0,
+                            exchangeBreakdown: {},
+                            marginUsed: accountMarginUsed,
+                            marginAvailable: accountMarginAvailable
+                          });
+                        }
+                        const group = accountGroups.get(accountKey)!;
+                        const positionWithAccount = { ...position, ...account };
+                        group.positions.push(positionWithAccount);
+                        group.totalMarketValue += account.marketValue || 0;
+                        group.totalPnL += account.pnl || 0;
+                        
+                        // Add to exchange breakdown
+                        const exchange = position.exchange || 'Unknown';
+                        group.exchangeBreakdown[exchange] = (group.exchangeBreakdown[exchange] || 0) + (account.marketValue || 0);
+                      });
+                    } else {
+                      // Individual view - use account from position
+                      const account = position.account || { name: 'Unknown Account' };
+                      const accountFamily = (account as any).family || position.family || 'Unknown';
+                      const accountKey = `${account.name}-${accountFamily}`;
+                      if (!accountGroups.has(accountKey)) {
+                        // Get margin information for this account
+                        const accountId = (account as any).id;
+                        const accountMarginUsed = accountId ? getUsedMargin(accountId) : 0;
+                        const accountMarginAvailable = accountId ? calculateCustomMargin(accountId) : 0;
+                        
+                        accountGroups.set(accountKey, {
+                          account: { ...account, family: accountFamily },
+                          positions: [],
+                          totalMarketValue: 0,
+                          totalPnL: 0,
+                          exchangeBreakdown: {},
+                          marginUsed: accountMarginUsed,
+                          marginAvailable: accountMarginAvailable
+                        });
+                      }
+                      const group = accountGroups.get(accountKey)!;
+                      group.positions.push(position);
+                      group.totalMarketValue += position.marketValue;
+                      group.totalPnL += position.pnl;
+                      
+                      // Add to exchange breakdown
+                      const exchange = position.exchange || 'Unknown';
+                      group.exchangeBreakdown[exchange] = (group.exchangeBreakdown[exchange] || 0) + position.marketValue;
+                    }
+                  });
+                  
+                  const totalMonthMarketValue = monthPositions.reduce((sum, pos) => sum + pos.marketValue, 0);
+                  const totalMonthPnL = monthPositions.reduce((sum, pos) => sum + pos.pnl, 0);
+                  
+                  return (
+                    <div key={month} className="mb-8">
+                      {/* Month Header */}
+                      <div className="flex items-center justify-between mb-4">
+                        <div className="flex items-center space-x-3">
+                          <CalendarIcon className="h-6 w-6 text-gray-600" />
+                          <h3 className="text-xl font-semibold text-gray-900">{month}</h3>
+                          <span className="text-sm bg-gray-100 text-gray-600 px-3 py-1 rounded-full">
                             {monthPositions.length} position{monthPositions.length !== 1 ? 's' : ''}
                           </span>
                         </div>
-                        
-                        <div className="space-y-2">
-                          <div className="flex justify-between items-center">
-                            <span className="text-sm text-gray-600">Max Profit:</span>
-                            <span className="text-sm font-semibold text-gray-900">
-                              {formatCurrency(-totalMarketValue)}
-                            </span>
+                        <div className="flex items-center space-x-6">
+                          <div className="text-right">
+                            <div className="text-sm text-gray-600">Total Max Profit</div>
+                            <div className="text-lg font-semibold text-gray-900">
+                              {formatCurrency(-totalMonthMarketValue)}
+                            </div>
                           </div>
-                          
-                          <div className="flex justify-between items-center">
-                            <span className="text-sm text-gray-600">Current P&L:</span>
-                            <span className={`text-sm font-semibold ${getPnLColor(totalPnL)}`}>
-                              {formatCurrency(totalPnL)}
-                            </span>
+                          <div className="text-right">
+                            <div className="text-sm text-gray-600">Total P&L</div>
+                            <div className={`text-lg font-semibold ${getPnLColor(totalMonthPnL)}`}>
+                              {formatCurrency(totalMonthPnL)}
+                            </div>
                           </div>
-                        </div>
-                        
-                        <div className="mt-4 pt-3 border-t border-gray-100">
                           <button
                             onClick={() => setActiveMonthTab(month)}
-                            className="w-full text-center text-sm text-purple-600 hover:text-purple-700 font-medium transition-colors"
+                            className="px-4 py-2 text-sm text-purple-600 hover:text-purple-700 font-medium border border-purple-200 hover:border-purple-300 rounded-lg transition-colors"
                           >
                             View Details →
                           </button>
                         </div>
                       </div>
-                    );
-                  })}
-                </div>
+                      
+                      {/* Account Cards for this month */}
+                      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
+                        {Array.from(accountGroups.values()).map((group, index) => (
+                          <div key={`${month}-${index}`} className="bg-white border border-gray-200 rounded-lg shadow-sm p-4 hover:shadow-md transition-shadow">
+                            <div className="flex items-center justify-between mb-3">
+                              <div className="flex items-center space-x-2">
+                                <UserIcon className="h-4 w-4 text-gray-600" />
+                                <h4 className="text-sm font-semibold text-gray-900">{group.account.name}</h4>
+                              </div>
+                              <span className="text-xs bg-blue-100 text-blue-600 px-2 py-1 rounded-full">
+                                {group.positions.length} position{group.positions.length !== 1 ? 's' : ''}
+                              </span>
+                            </div>
+                            
+                            <div className="space-y-2">
+                              <div className="flex justify-between items-center">
+                                <span className="text-xs text-gray-600">Max Profit:</span>
+                                <span className="text-sm font-semibold text-gray-900">
+                                  {formatCurrency(-group.totalMarketValue)}
+                                </span>
+                              </div>
+                              
+                              <div className="flex justify-between items-center">
+                                <span className="text-xs text-gray-600">Current P&L:</span>
+                                <span className={`text-sm font-semibold ${getPnLColor(group.totalPnL)}`}>
+                                  {formatCurrency(group.totalPnL)}
+                                </span>
+                              </div>
+                              
+                              {/* Divider line */}
+                              <div className="border-t border-gray-200 my-2"></div>
+                              
+                              <div className="flex justify-between items-center">
+                                <span className="text-xs text-gray-600">Margin Used:</span>
+                                <span className="text-sm font-semibold text-orange-600">
+                                  {formatCurrency(group.marginUsed)}
+                                </span>
+                              </div>
+                              
+                              <div className="flex justify-between items-center">
+                                <span className="text-xs text-gray-600">Margin Available:</span>
+                                <span className="text-sm font-semibold text-green-600">
+                                  {formatCurrency(group.marginAvailable)}
+                                </span>
+                              </div>
+                            </div>
+                            
+                            {/* Exchange Breakdown */}
+                            {Object.keys(group.exchangeBreakdown).length > 0 && (
+                              <div className="mt-3 pt-2 border-t border-gray-100">
+                                <div className="text-xs text-gray-600 mb-2">Max Profit by Exchange:</div>
+                                <div className="space-y-1">
+                                  {Object.entries(group.exchangeBreakdown)
+                                    .sort(([,a], [,b]) => b - a) // Sort by value descending
+                                    .map(([exchange, value]) => (
+                                    <div key={exchange} className="flex justify-between items-center">
+                                      <span className="text-xs text-gray-500">{exchange}:</span>
+                                      <span className="text-xs font-medium text-gray-700">
+                                        {formatCurrency(-value)}
+                                      </span>
+                                    </div>
+                                  ))}
+                                </div>
+                              </div>
+                            )}
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  );
+                })}
                 
                 {getAvailableMonths().filter(month => month !== 'Overview').every(month => {
                   const monthPositions = familyView 
