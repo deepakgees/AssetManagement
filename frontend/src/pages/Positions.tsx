@@ -16,6 +16,7 @@ import {
   ChevronDownIcon,
   UsersIcon,
   UserIcon,
+  CalendarIcon,
 } from '@heroicons/react/24/outline';
 import Layout from '../components/Layout';
 import { getPositions, getPositionsSummary, type Position } from '../services/positionsService';
@@ -28,12 +29,13 @@ export default function Positions() {
   const [viewMode, setViewMode] = useState<'accounts' | 'positions'>('accounts');
   const [familyView, setFamilyView] = useState<boolean>(true); // Default to family view
   const [sortConfig, setSortConfig] = useState<{
-    key: keyof Position | null;
+    key: keyof Position | 'remainingPnL' | null;
     direction: 'asc' | 'desc';
   }>({ key: null, direction: 'asc' });
   const [expandedPositions, setExpandedPositions] = useState<Set<number>>(new Set());
   const [expandedMonths, setExpandedMonths] = useState<Set<string>>(new Set());
   const [expandedMarginFamilies, setExpandedMarginFamilies] = useState<Set<string>>(new Set());
+  const [activeMonthTab, setActiveMonthTab] = useState<string>('');
 
   const queryClient = useQueryClient();
 
@@ -209,6 +211,33 @@ export default function Positions() {
     setExpandedPositions(new Set()); // Clear expanded positions when going back
     setExpandedMonths(new Set()); // Clear expanded months when going back
     setExpandedMarginFamilies(new Set()); // Clear expanded margin families when going back
+    setActiveMonthTab(''); // Clear active tab
+  };
+
+  // Get current month's positions
+  const getCurrentMonthPositions = () => {
+    if (activeMonthTab === 'Overview') {
+      return positions || [];
+    }
+    if (familyView && groupedFamilyPositions) {
+      return groupedFamilyPositions[activeMonthTab] || [];
+    } else if (!familyView && groupedPositions) {
+      return groupedPositions[activeMonthTab] || [];
+    }
+    return [];
+  };
+
+  // Get available months for tabs
+  const getAvailableMonths = () => {
+    const months = [];
+    if (familyView && groupedFamilyPositions) {
+      months.push('Overview', ...Object.keys(groupedFamilyPositions));
+    } else if (!familyView && groupedPositions) {
+      months.push('Overview', ...Object.keys(groupedPositions));
+    } else {
+      months.push('Overview');
+    }
+    return months;
   };
 
   const togglePositionExpansion = (positionId: number) => {
@@ -332,19 +361,44 @@ export default function Positions() {
     return sortedGroups;
   }, [positions, familyView]);
 
-  const handleSort = (key: keyof Position) => {
+  // Set active tab when positions are loaded
+  React.useEffect(() => {
+    if (familyView && groupedFamilyPositions) {
+      const months = Object.keys(groupedFamilyPositions);
+      if (months.length > 0 && !activeMonthTab) {
+        setActiveMonthTab('Overview');
+      }
+    } else if (!familyView && groupedPositions) {
+      const months = Object.keys(groupedPositions);
+      if (months.length > 0 && !activeMonthTab) {
+        setActiveMonthTab('Overview');
+      }
+    }
+  }, [groupedFamilyPositions, groupedPositions, familyView, activeMonthTab]);
+
+  const handleSort = (key: keyof Position | 'remainingPnL') => {
     setSortConfig(prevConfig => ({
-      key,
+      key: key,
       direction: prevConfig.key === key && prevConfig.direction === 'asc' ? 'desc' : 'asc'
     }));
   };
 
-  const sortedPositions = useMemo(() => {
-    if (!positions || !sortConfig.key) return positions;
+  // Get sorted positions for the current month
+  const getSortedCurrentMonthPositions = useMemo(() => {
+    const currentPositions = getCurrentMonthPositions();
+    if (!currentPositions || !sortConfig.key) return currentPositions;
 
-    return [...positions].sort((a, b) => {
-      const aValue = a[sortConfig.key!];
-      const bValue = b[sortConfig.key!];
+    return [...currentPositions].sort((a, b) => {
+      let aValue, bValue;
+
+      // Handle custom sorting for calculated fields
+      if (sortConfig.key === 'remainingPnL') {
+        aValue = -a.marketValue - a.pnl;
+        bValue = -b.marketValue - b.pnl;
+      } else {
+        aValue = a[sortConfig.key!];
+        bValue = b[sortConfig.key!];
+      }
 
       if (typeof aValue === 'string' && typeof bValue === 'string') {
         return sortConfig.direction === 'asc' 
@@ -358,9 +412,9 @@ export default function Positions() {
 
       return 0;
     });
-  }, [positions, sortConfig]);
+  }, [getCurrentMonthPositions, sortConfig]);
 
-  const getSortIcon = (key: keyof Position) => {
+  const getSortIcon = (key: keyof Position | 'remainingPnL') => {
     if (sortConfig.key !== key) {
       return <ChevronUpIcon className="h-4 w-4 text-gray-400" />;
     }
@@ -734,436 +788,424 @@ export default function Positions() {
             </div>
           )}
 
-                     {/* Summary Cards */}
-           {summary && (
-             <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
-               <div className="bg-white rounded-lg shadow p-4">
-                 <div className="flex items-center">
-                   <ChartBarIcon className="h-8 w-8 text-blue-500" />
-                   <div className="ml-3">
-                     <p className="text-sm font-medium text-gray-500">Total Positions</p>
-                     <p className="text-2xl font-bold text-gray-900">{summary.summary?.totalPositions || 0}</p>
-                   </div>
-                 </div>
-               </div>
 
-                                                               <div className="bg-white rounded-lg shadow p-4">
-                   <div className="flex items-center">
-                     <CurrencyDollarIcon className="h-8 w-8 text-green-500" />
-                     <div className="ml-3">
-                       <p className="text-sm font-medium text-gray-500">Max Profit</p>
-                       <p className="text-2xl font-bold text-gray-900">
-                         {formatCurrency(-(summary.summary?.totalMarketValue || 0))}
-                       </p>
-                     </div>
-                   </div>
-                 </div>
-
-                               <div className="bg-white rounded-lg shadow p-4">
-                  <div className="flex items-center">
-                    <CurrencyDollarIcon className="h-8 w-8 text-blue-500" />
-                    <div className="ml-3">
-                      <p className="text-sm font-medium text-gray-500">Current P&L</p>
-                      <p className={`text-2xl font-bold ${getPnLColor(summary.summary?.totalPnL || 0)}`}>
-                        {formatCurrency(summary.summary?.totalPnL || 0)}
-                      </p>
-                    </div>
-                  </div>
+          {/* Month Tabs Navigation */}
+          {getAvailableMonths().length > 0 && (
+            <div className="bg-white shadow-sm rounded-lg mb-6 inline-block">
+              <div className="px-4 py-2">
+                <div className="flex space-x-8 overflow-x-auto border-b border-gray-200">
+                  {getAvailableMonths().map((month) => {
+                    let monthPositions = [];
+                    let totalMarketValue = 0;
+                    
+                    if (month === 'Overview') {
+                      monthPositions = positions || [];
+                      totalMarketValue = monthPositions.reduce((sum, pos) => sum + pos.marketValue, 0);
+                    } else {
+                      monthPositions = familyView 
+                        ? (groupedFamilyPositions?.[month] || [])
+                        : (groupedPositions?.[month] || []);
+                      totalMarketValue = monthPositions.reduce((sum, pos) => sum + pos.marketValue, 0);
+                    }
+                    
+                    const isActive = activeMonthTab === month;
+                    
+                    return (
+                      <button
+                        key={month}
+                        onClick={() => setActiveMonthTab(month)}
+                        className={`flex-shrink-0 flex items-center space-x-2 py-3 px-1 transition-colors relative ${
+                          isActive
+                            ? 'text-purple-600'
+                            : 'text-gray-600 hover:text-gray-800'
+                        }`}
+                      >
+                        <div className="flex items-center space-x-2">
+                          {month === 'Overview' ? (
+                            <ChartBarIcon className={`h-5 w-5 ${isActive ? 'text-purple-600' : 'text-gray-600'}`} />
+                          ) : (
+                            <CalendarIcon className={`h-5 w-5 ${isActive ? 'text-purple-600' : 'text-gray-600'}`} />
+                          )}
+                          <span className={`text-sm font-medium ${isActive ? 'text-purple-600' : 'text-gray-600'}`}>
+                            {month}
+                          </span>
+                        </div>
+                        {isActive && (
+                          <div className="absolute bottom-0 left-0 right-0 h-0.5 bg-purple-600"></div>
+                        )}
+                      </button>
+                    );
+                  })}
                 </div>
-             </div>
-           )}
+              </div>
+            </div>
+          )}
 
-          {/* Positions Table */}
+          {/* Current Month Positions Table */}
           <div className="bg-white shadow rounded-lg">
-            <div className="px-6 py-4 border-b border-gray-200 flex justify-between items-center">
-              <h2 className="text-lg font-medium text-gray-900">
-                {familyView ? 'Family-Level' : 'Open'} Positions ({positions?.length || 0})
-              </h2>
-              {isLiveData && (
+            {isLiveData && (
+              <div className="px-6 py-4 border-b border-gray-200 flex justify-end items-center">
                 <span className="inline-flex items-center px-2 py-1 text-xs font-medium bg-green-100 text-green-800 rounded-full">
                   <CheckCircleIcon className="h-3 w-3 mr-1" />
                   Live
                 </span>
-              )}
-            </div>
+              </div>
+            )}
 
             {isLoading ? (
               <div className="px-6 py-8 text-center">
                 <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary-600 mx-auto"></div>
                 <p className="mt-2 text-gray-500">Connecting to Zerodha...</p>
               </div>
-            ) : positions && positions.length > 0 ? (
+            ) : activeMonthTab === 'Overview' ? (
+              // Overview Tab - Show month cards
+              <div className="p-6">
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
+                  {getAvailableMonths().filter(month => month !== 'Overview').map((month) => {
+                    const monthPositions = familyView 
+                      ? (groupedFamilyPositions?.[month] || [])
+                      : (groupedPositions?.[month] || []);
+                    const totalMarketValue = monthPositions.reduce((sum, pos) => sum + pos.marketValue, 0);
+                    const totalPnL = monthPositions.reduce((sum, pos) => sum + pos.pnl, 0);
+                    
+                    if (monthPositions.length === 0) return null;
+                    
+                    return (
+                      <div key={month} className="bg-white border border-gray-200 rounded-lg shadow-sm p-4 hover:shadow-md transition-shadow">
+                        <div className="flex items-center justify-between mb-3">
+                          <div className="flex items-center space-x-2">
+                            <CalendarIcon className="h-5 w-5 text-gray-600" />
+                            <h3 className="text-lg font-semibold text-gray-900">{month}</h3>
+                          </div>
+                          <span className="text-xs bg-gray-100 text-gray-600 px-2 py-1 rounded-full">
+                            {monthPositions.length} position{monthPositions.length !== 1 ? 's' : ''}
+                          </span>
+                        </div>
+                        
+                        <div className="space-y-2">
+                          <div className="flex justify-between items-center">
+                            <span className="text-sm text-gray-600">Max Profit:</span>
+                            <span className="text-sm font-semibold text-gray-900">
+                              {formatCurrency(-totalMarketValue)}
+                            </span>
+                          </div>
+                          
+                          <div className="flex justify-between items-center">
+                            <span className="text-sm text-gray-600">Current P&L:</span>
+                            <span className={`text-sm font-semibold ${getPnLColor(totalPnL)}`}>
+                              {formatCurrency(totalPnL)}
+                            </span>
+                          </div>
+                        </div>
+                        
+                        <div className="mt-4 pt-3 border-t border-gray-100">
+                          <button
+                            onClick={() => setActiveMonthTab(month)}
+                            className="w-full text-center text-sm text-purple-600 hover:text-purple-700 font-medium transition-colors"
+                          >
+                            View Details →
+                          </button>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+                
+                {getAvailableMonths().filter(month => month !== 'Overview').every(month => {
+                  const monthPositions = familyView 
+                    ? (groupedFamilyPositions?.[month] || [])
+                    : (groupedPositions?.[month] || []);
+                  return monthPositions.length === 0;
+                }) && (
+                  <div className="text-center py-8">
+                    <ChartBarIcon className="h-12 w-12 text-gray-400 mx-auto" />
+                    <h3 className="mt-2 text-sm font-medium text-gray-900">No positions found</h3>
+                    <p className="mt-1 text-sm text-gray-500">
+                      No open positions for this account.
+                    </p>
+                  </div>
+                )}
+              </div>
+            ) : getSortedCurrentMonthPositions.length > 0 ? (
               <div className="overflow-x-auto">
                 <table className="min-w-full divide-y divide-gray-200">
-                                                        <thead className="bg-gray-50">
-                      <tr>
+                  <thead className="bg-gray-50">
+                    <tr>
+                      <th 
+                        className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100"
+                        onClick={() => handleSort('tradingSymbol')}
+                      >
+                        <div className="flex items-center">
+                          Symbol
+                          {getSortIcon('tradingSymbol')}
+                        </div>
+                      </th>
+                      {familyView && !selectedFamilyName && (
                         <th 
                           className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100"
-                          onClick={() => handleSort('tradingSymbol')}
+                          onClick={() => handleSort('family')}
                         >
                           <div className="flex items-center">
-                            Symbol
-                            {getSortIcon('tradingSymbol')}
+                            Family
+                            {getSortIcon('family')}
                           </div>
                         </th>
-                        {familyView && !selectedFamilyName && (
-                          <th 
-                            className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100"
-                            onClick={() => handleSort('family')}
-                          >
-                            <div className="flex items-center">
-                              Family
-                              {getSortIcon('family')}
-                            </div>
-                          </th>
-                        )}
-                        <th 
-                          className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100"
-                          onClick={() => handleSort('quantity')}
-                        >
-                          <div className="flex items-center">
-                            Quantity
-                            {getSortIcon('quantity')}
-                          </div>
-                        </th>
-                        <th 
-                          className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100"
-                          onClick={() => handleSort('marginBlocked')}
-                        >
-                          <div className="flex items-center">
-                            Margin Blocked
-                            {getSortIcon('marginBlocked')}
-                          </div>
-                        </th>
-                        <th 
-                          className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider"
-                        >
+                      )}
+                      <th 
+                        className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100"
+                        onClick={() => handleSort('quantity')}
+                      >
+                        <div className="flex items-center">
+                          Quantity
+                          {getSortIcon('quantity')}
+                        </div>
+                      </th>
+                      <th 
+                        className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100"
+                        onClick={() => handleSort('marginBlocked')}
+                      >
+                        <div className="flex items-center">
+                          Margin Blocked
+                          {getSortIcon('marginBlocked')}
+                        </div>
+                      </th>
+                      <th 
+                        className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100"
+                        onClick={() => handleSort('remainingPnL' as keyof Position)}
+                      >
+                        <div className="flex items-center">
                           Remaining P&L
-                        </th>
-                        <th 
-                          className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100"
-                          onClick={() => handleSort('marketValue')}
-                        >
-                          <div className="flex items-center">
-                            Market Value (Possible Max Profit)
-                            {getSortIcon('marketValue')}
-                          </div>
-                        </th>
-                        <th 
-                          className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100"
-                          onClick={() => handleSort('averagePrice')}
-                        >
-                          <div className="flex items-center">
-                            Avg Price
-                            {getSortIcon('averagePrice')}
-                          </div>
-                        </th>
-                        <th 
-                          className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100"
-                          onClick={() => handleSort('lastPrice')}
-                        >
-                          <div className="flex items-center">
-                            Last Price
-                            {getSortIcon('lastPrice')}
-                          </div>
-                        </th>
-                        <th 
-                          className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100"
-                          onClick={() => handleSort('pnl')}
-                        >
-                          <div className="flex items-center">
-                            Current P&L
-                            {getSortIcon('pnl')}
-                          </div>
-                        </th>
-                      </tr>
-                    </thead>
-                                                                              <tbody className="bg-white divide-y divide-gray-200">
-                       {familyView ? (
-                         // Family view - show grouped by month
-                         groupedFamilyPositions && Object.entries(groupedFamilyPositions).map(([month, monthPositions]) => (
-                           <React.Fragment key={month}>
-                             {/* Month Header Row */}
-                             <tr className="bg-gray-100 border-b-2 border-gray-300">
-                               <td colSpan={selectedFamilyName ? 7 : 8} className="px-6 py-3">
-                                 <div className="flex items-center justify-between">
-                                   <div className="flex items-center">
-                                     <h3 className="text-lg font-semibold text-gray-800">{month}</h3>
-                                     <span className="ml-3 px-2 py-1 text-xs font-medium bg-gray-200 text-gray-700 rounded-full">
-                                       {monthPositions.length} position{monthPositions.length !== 1 ? 's' : ''}
-                                     </span>
-                                     <span className="ml-3 px-2 py-1 text-xs font-medium bg-blue-100 text-blue-700 rounded-full">
-                                       Market Value: {formatCurrency(monthPositions.reduce((sum, pos) => sum + pos.marketValue, 0))}
-                                     </span>
-                                   </div>
-                                   <button
-                                     onClick={() => toggleMonthExpansion(month)}
-                                     className="p-2 text-gray-500 hover:text-gray-700 transition-colors"
-                                     title={expandedMonths.has(month) ? "Collapse" : "Expand"}
-                                   >
-                                     {expandedMonths.has(month) ? (
-                                       <ChevronUpIcon className="h-5 w-5" />
-                                     ) : (
-                                       <ChevronDownIcon className="h-5 w-5" />
-                                     )}
-                                   </button>
-                                 </div>
-                               </td>
-                             </tr>
-                             
-                             {/* Month Positions */}
-                             {expandedMonths.has(month) && monthPositions.map((position) => (
-                               <React.Fragment key={position.id}>
-                                 <tr className={`hover:bg-gray-50 ${getRowBackgroundColor(position)}`}>
-                                   <td className="px-6 py-4 whitespace-nowrap">
-                                     <div className="flex items-center">
-                                       <div className={`w-3 h-3 rounded-full mr-2 ${position.side === 'BUY' ? 'bg-green-500' : 'bg-red-500'}`}></div>
-                                       <div className="text-sm font-medium text-gray-900">{position.tradingSymbol}</div>
-                                     </div>
-                                     <div className="flex items-center justify-between mt-1">
-                                       <div className="text-xs text-gray-500">
-                                         {position.accounts ? position.accounts.length : 1} account{position.accounts && position.accounts.length !== 1 ? 's' : ''}
-                                       </div>
-                                       <button
-                                         onClick={() => togglePositionExpansion(position.id)}
-                                         className="ml-2 p-1 text-gray-400 hover:text-gray-600 transition-colors"
-                                         title={expandedPositions.has(position.id) ? "Collapse" : "Expand"}
-                                       >
-                                         {expandedPositions.has(position.id) ? (
-                                           <ChevronUpIcon className="h-4 w-4" />
-                                         ) : (
-                                           <ChevronDownIcon className="h-4 w-4" />
-                                         )}
-                                       </button>
-                                     </div>
-                                   </td>
-                                   {!selectedFamilyName && (
-                                     <td className="px-6 py-4 whitespace-nowrap">
-                                       <div className="text-sm text-gray-900">
-                                         {position.family || 'Unknown'}
-                                       </div>
-                                     </td>
-                                   )}
-                                   <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
-                                     {formatNumber(position.quantity)}
-                                   </td>
-                                   <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
-                                     {formatCurrency(position.marginBlocked || 0)}
-                                   </td>
-                                   <td className="px-6 py-4 whitespace-nowrap text-sm">
-                                     <span className={getPnLColor(-position.marketValue - position.pnl)}>
-                                       {formatCurrency(-position.marketValue - position.pnl)}
-                                       {getMarginPercentage(-position.marketValue - position.pnl, position.marginBlocked || 0)}
-                                     </span>
-                                   </td>
-                                   <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
-                                     {formatCurrency(-position.marketValue)}
-                                     {getMarginPercentage(-position.marketValue, position.marginBlocked || 0)}
-                                   </td>
-                                   <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
-                                     {formatCurrencyWithDecimals(position.averagePrice)}
-                                   </td>
-                                   <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
-                                     {formatCurrencyWithDecimals(position.lastPrice)}
-                                   </td>
-                                   <td className="px-6 py-4 whitespace-nowrap text-sm">
-                                     <span className={getPnLColor(position.pnl)}>
-                                       {formatCurrency(position.pnl)}
-                                     </span>
-                                   </td>
-                                 </tr>
-                                 
-                                 {/* Expanded Account Breakdown */}
-                                 {expandedPositions.has(position.id) && (
-                                   <>
-                                     {position.accounts ? (
-                                       // Family view - show individual accounts
-                                       position.accounts.map((account, index) => (
-                                         <tr key={`${position.id}-${account.id}`} className="bg-gray-50 border-l-4 border-primary-200">
-                                           <td className="px-6 py-3 whitespace-nowrap pl-12">
-                                             <div className="text-sm text-gray-600">
-                                               <span className="font-medium">{account.name}</span>
-                                               <span className="text-xs text-gray-400 ml-2">(Account)</span>
-                                             </div>
-                                           </td>
-                                           {!selectedFamilyName && (
-                                             <td className="px-6 py-3 whitespace-nowrap">
-                                               <div className="text-sm text-gray-600">
-                                                 {account.family || 'Unknown'}
-                                               </div>
-                                             </td>
-                                           )}
-                                           <td className="px-6 py-3 whitespace-nowrap text-sm text-gray-600">
-                                             {account.quantity !== undefined ? formatNumber(account.quantity) : 'N/A'}
-                                           </td>
-                                           <td className="px-6 py-3 whitespace-nowrap text-sm text-gray-600">
-                                             {position.symbolMargin !== undefined && account.quantity !== undefined ? 
-                                               formatCurrency(Math.abs(account.quantity) * position.symbolMargin) : 'N/A'}
-                                           </td>
-                                           <td className="px-6 py-3 whitespace-nowrap text-sm text-gray-600">
-                                             {account.marketValue !== undefined && account.pnl !== undefined ? (
-                                               <span className={getPnLColor(-account.marketValue - account.pnl)}>
-                                                 {formatCurrency(-account.marketValue - account.pnl)}
-                                                 {getMarginPercentage(-account.marketValue - account.pnl, Math.abs(account.quantity || 0) * (position.symbolMargin || 0))}
-                                               </span>
-                                             ) : 'N/A'}
-                                           </td>
-                                           <td className="px-6 py-3 whitespace-nowrap text-sm text-gray-600">
-                                             {account.marketValue !== undefined ? (
-                                               <>
-                                                 {formatCurrency(-account.marketValue)}
-                                                 {getMarginPercentage(-account.marketValue, Math.abs(account.quantity || 0) * (position.symbolMargin || 0))}
-                                               </>
-                                             ) : 'N/A'}
-                                           </td>
-                                           <td className="px-6 py-3 whitespace-nowrap text-sm text-gray-600">
-                                             {account.averagePrice !== undefined ? formatCurrencyWithDecimals(account.averagePrice) : 'N/A'}
-                                           </td>
-                                           <td className="px-6 py-3 whitespace-nowrap text-sm text-gray-600">
-                                             {account.lastPrice !== undefined ? formatCurrencyWithDecimals(account.lastPrice) : 'N/A'}
-                                           </td>
-                                           <td className="px-6 py-3 whitespace-nowrap text-sm text-gray-600">
-                                             {account.pnl !== undefined ? (
-                                               <span className={getPnLColor(account.pnl)}>
-                                                 {formatCurrency(account.pnl)}
-                                               </span>
-                                             ) : 'N/A'}
-                                           </td>
-                                         </tr>
-                                       ))
-                                     ) : (
-                                       // Individual view - show position details
-                                       <tr className="bg-gray-50 border-l-4 border-primary-200">
-                                         <td className="px-6 py-3 whitespace-nowrap pl-12">
-                                           <div className="text-sm text-gray-600">
-                                             <span className="font-medium">{position.account?.name || 'Unknown Account'}</span>
-                                             <span className="text-xs text-gray-400 ml-2">(Account)</span>
-                                           </div>
-                                         </td>
-                                         {!selectedFamilyName && (
-                                           <td className="px-6 py-3 whitespace-nowrap">
-                                             <div className="text-sm text-gray-600">
-                                               {position.family || 'Unknown'}
-                                             </div>
-                                           </td>
-                                         )}
-                                         <td className="px-6 py-3 whitespace-nowrap text-sm text-gray-600">
-                                           {formatNumber(position.quantity)}
-                                         </td>
-                                         <td className="px-6 py-3 whitespace-nowrap text-sm text-gray-600">
-                                           {formatCurrency(position.marginBlocked || 0)}
-                                         </td>
-                                         <td className="px-6 py-3 whitespace-nowrap text-sm text-gray-600">
-                                           <span className={getPnLColor(-position.marketValue - position.pnl)}>
-                                             {formatCurrency(-position.marketValue - position.pnl)}
-                                             {getMarginPercentage(-position.marketValue - position.pnl, position.marginBlocked || 0)}
-                                           </span>
-                                         </td>
-                                         <td className="px-6 py-3 whitespace-nowrap text-sm text-gray-600">
-                                           {formatCurrency(-position.marketValue)}
-                                           {getMarginPercentage(-position.marketValue, position.marginBlocked || 0)}
-                                         </td>
-                                         <td className="px-6 py-3 whitespace-nowrap text-sm text-gray-600">
-                                           {formatCurrencyWithDecimals(position.averagePrice)}
-                                         </td>
-                                         <td className="px-6 py-3 whitespace-nowrap text-sm text-gray-600">
-                                           {formatCurrencyWithDecimals(position.lastPrice)}
-                                         </td>
-                                         <td className="px-6 py-3 whitespace-nowrap text-sm text-gray-600">
-                                           <span className={getPnLColor(position.pnl)}>
-                                             {formatCurrency(position.pnl)}
-                                           </span>
-                                         </td>
-                                       </tr>
-                                     )}
-                                   </>
-                                 )}
-                               </React.Fragment>
-                             ))}
-                           </React.Fragment>
-                         ))
-                       ) : (
-                         // Individual view - show grouped by month
-                         groupedPositions && Object.entries(groupedPositions).map(([month, monthPositions]) => (
-                           <React.Fragment key={month}>
-                             {/* Month Header Row */}
-                             <tr className="bg-gray-100 border-b-2 border-gray-300">
-                               <td colSpan={selectedFamilyName ? 7 : 8} className="px-6 py-3">
-                                 <div className="flex items-center justify-between">
-                                   <div className="flex items-center">
-                                     <h3 className="text-lg font-semibold text-gray-800">{month}</h3>
-                                     <span className="ml-3 px-2 py-1 text-xs font-medium bg-gray-200 text-gray-700 rounded-full">
-                                       {monthPositions.length} position{monthPositions.length !== 1 ? 's' : ''}
-                                     </span>
-                                     <span className="ml-3 px-2 py-1 text-xs font-medium bg-blue-100 text-blue-700 rounded-full">
-                                       Market Value: {formatCurrency(monthPositions.reduce((sum, pos) => sum + pos.marketValue, 0))}
-                                     </span>
-                                   </div>
-                                   <button
-                                     onClick={() => toggleMonthExpansion(month)}
-                                     className="p-2 text-gray-500 hover:text-gray-700 transition-colors"
-                                     title={expandedMonths.has(month) ? "Collapse" : "Expand"}
-                                   >
-                                     {expandedMonths.has(month) ? (
-                                       <ChevronUpIcon className="h-5 w-5" />
-                                     ) : (
-                                       <ChevronDownIcon className="h-5 w-5" />
-                                     )}
-                                   </button>
-                                 </div>
-                               </td>
-                             </tr>
-                             
-                             {/* Month Positions */}
-                             {expandedMonths.has(month) && monthPositions.map((position) => (
-                               <tr key={position.id} className={`hover:bg-gray-50 ${getRowBackgroundColor(position)}`}>
-                                 <td className="px-6 py-4 whitespace-nowrap">
-                                   <div className="flex items-center">
-                                     <div className={`w-3 h-3 rounded-full mr-2 ${position.side === 'BUY' ? 'bg-green-500' : 'bg-red-500'}`}></div>
-                                     <div className="text-sm font-medium text-gray-900">{position.tradingSymbol}</div>
-                                   </div>
-                                 </td>
-                                 <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
-                                   {formatNumber(position.quantity)}
-                                 </td>
-                                 <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
-                                   {formatCurrency(position.marginBlocked || 0)}
-                                 </td>
-                                 <td className="px-6 py-4 whitespace-nowrap text-sm">
-                                   <span className={getPnLColor(-position.marketValue - position.pnl)}>
-                                     {formatCurrency(-position.marketValue - position.pnl)}
-                                     {getMarginPercentage(-position.marketValue - position.pnl, position.marginBlocked || 0)}
-                                   </span>
-                                 </td>
-                                 <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
-                                   {formatCurrency(-position.marketValue)}
-                                   {getMarginPercentage(-position.marketValue, position.marginBlocked || 0)}
-                                 </td>
-                                 <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
-                                   {formatCurrencyWithDecimals(position.averagePrice)}
-                                 </td>
-                                 <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
-                                   {formatCurrencyWithDecimals(position.lastPrice)}
-                                 </td>
-                                 <td className="px-6 py-4 whitespace-nowrap text-sm">
-                                   <span className={getPnLColor(position.pnl)}>
-                                     {formatCurrency(position.pnl)}
-                                   </span>
-                                 </td>
-                               </tr>
-                             ))}
-                           </React.Fragment>
-                         ))
-                       )}
-                     </tbody>
+                          {getSortIcon('remainingPnL' as keyof Position)}
+                        </div>
+                      </th>
+                      <th 
+                        className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100"
+                        onClick={() => handleSort('marketValue')}
+                      >
+                        <div className="flex items-center">
+                          Market Value (Possible Max Profit)
+                          {getSortIcon('marketValue')}
+                        </div>
+                      </th>
+                      <th 
+                        className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100"
+                        onClick={() => handleSort('averagePrice')}
+                      >
+                        <div className="flex items-center">
+                          Avg Price
+                          {getSortIcon('averagePrice')}
+                        </div>
+                      </th>
+                      <th 
+                        className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100"
+                        onClick={() => handleSort('lastPrice')}
+                      >
+                        <div className="flex items-center">
+                          Last Price
+                          {getSortIcon('lastPrice')}
+                        </div>
+                      </th>
+                      <th 
+                        className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100"
+                        onClick={() => handleSort('pnl')}
+                      >
+                        <div className="flex items-center">
+                          Current P&L
+                          {getSortIcon('pnl')}
+                        </div>
+                      </th>
+                    </tr>
+                  </thead>
+                  <tbody className="bg-white divide-y divide-gray-200">
+                    {getSortedCurrentMonthPositions.map((position) => (
+                      <React.Fragment key={position.id}>
+                        <tr className={`hover:bg-gray-50 ${getRowBackgroundColor(position)}`}>
+                          <td className="px-6 py-4 whitespace-nowrap">
+                            <div className="flex items-center">
+                              <div className={`w-3 h-3 rounded-full mr-2 ${position.side === 'BUY' ? 'bg-green-500' : 'bg-red-500'}`}></div>
+                              <div className="text-sm font-medium text-gray-900">{position.tradingSymbol}</div>
+                            </div>
+                            <div className="flex items-center justify-between mt-1">
+                              <div className="text-xs text-gray-500">
+                                {position.accounts ? position.accounts.length : 1} account{position.accounts && position.accounts.length !== 1 ? 's' : ''}
+                              </div>
+                              <button
+                                onClick={() => togglePositionExpansion(position.id)}
+                                className="ml-2 p-1 text-gray-400 hover:text-gray-600 transition-colors"
+                                title={expandedPositions.has(position.id) ? "Collapse" : "Expand"}
+                              >
+                                {expandedPositions.has(position.id) ? (
+                                  <ChevronUpIcon className="h-4 w-4" />
+                                ) : (
+                                  <ChevronDownIcon className="h-4 w-4" />
+                                )}
+                              </button>
+                            </div>
+                          </td>
+                          {familyView && !selectedFamilyName && (
+                            <td className="px-6 py-4 whitespace-nowrap">
+                              <div className="text-sm text-gray-900">
+                                {position.family || 'Unknown'}
+                              </div>
+                            </td>
+                          )}
+                          <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
+                            {formatNumber(position.quantity)}
+                          </td>
+                          <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
+                            {formatCurrency(position.marginBlocked || 0)}
+                          </td>
+                          <td className="px-6 py-4 whitespace-nowrap text-sm">
+                            <span className={getPnLColor(-position.marketValue - position.pnl)}>
+                              {formatCurrency(-position.marketValue - position.pnl)}
+                              {getMarginPercentage(-position.marketValue - position.pnl, position.marginBlocked || 0)}
+                            </span>
+                          </td>
+                          <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
+                            {formatCurrency(-position.marketValue)}
+                            {getMarginPercentage(-position.marketValue, position.marginBlocked || 0)}
+                          </td>
+                          <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
+                            {formatCurrencyWithDecimals(position.averagePrice)}
+                          </td>
+                          <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
+                            {formatCurrencyWithDecimals(position.lastPrice)}
+                          </td>
+                          <td className="px-6 py-4 whitespace-nowrap text-sm">
+                            <span className={getPnLColor(position.pnl)}>
+                              {formatCurrency(position.pnl)}
+                            </span>
+                          </td>
+                        </tr>
+                        
+                        {/* Expanded Account Breakdown */}
+                        {expandedPositions.has(position.id) && (
+                          <>
+                            {position.accounts ? (
+                              // Family view - show individual accounts
+                              position.accounts.map((account, index) => (
+                                <tr key={`${position.id}-${account.id}`} className="bg-gray-50 border-l-4 border-primary-200">
+                                  <td className="px-6 py-3 whitespace-nowrap pl-12">
+                                    <div className="text-sm text-gray-600">
+                                      <span className="font-medium">{account.name}</span>
+                                      <span className="text-xs text-gray-400 ml-2">(Account)</span>
+                                    </div>
+                                  </td>
+                                  {familyView && !selectedFamilyName && (
+                                    <td className="px-6 py-3 whitespace-nowrap">
+                                      <div className="text-sm text-gray-600">
+                                        {account.family || 'Unknown'}
+                                      </div>
+                                    </td>
+                                  )}
+                                  <td className="px-6 py-3 whitespace-nowrap text-sm text-gray-600">
+                                    {account.quantity !== undefined ? formatNumber(account.quantity) : 'N/A'}
+                                  </td>
+                                  <td className="px-6 py-3 whitespace-nowrap text-sm text-gray-600">
+                                    {position.symbolMargin !== undefined && account.quantity !== undefined ? 
+                                      formatCurrency(Math.abs(account.quantity) * position.symbolMargin) : 'N/A'}
+                                  </td>
+                                  <td className="px-6 py-3 whitespace-nowrap text-sm text-gray-600">
+                                    {account.marketValue !== undefined && account.pnl !== undefined ? (
+                                      <span className={getPnLColor(-account.marketValue - account.pnl)}>
+                                        {formatCurrency(-account.marketValue - account.pnl)}
+                                        {getMarginPercentage(-account.marketValue - account.pnl, Math.abs(account.quantity || 0) * (position.symbolMargin || 0))}
+                                      </span>
+                                    ) : 'N/A'}
+                                  </td>
+                                  <td className="px-6 py-3 whitespace-nowrap text-sm text-gray-600">
+                                    {account.marketValue !== undefined ? (
+                                      <>
+                                        {formatCurrency(-account.marketValue)}
+                                        {getMarginPercentage(-account.marketValue, Math.abs(account.quantity || 0) * (position.symbolMargin || 0))}
+                                      </>
+                                    ) : 'N/A'}
+                                  </td>
+                                  <td className="px-6 py-3 whitespace-nowrap text-sm text-gray-600">
+                                    {account.averagePrice !== undefined ? formatCurrencyWithDecimals(account.averagePrice) : 'N/A'}
+                                  </td>
+                                  <td className="px-6 py-3 whitespace-nowrap text-sm text-gray-600">
+                                    {account.lastPrice !== undefined ? formatCurrencyWithDecimals(account.lastPrice) : 'N/A'}
+                                  </td>
+                                  <td className="px-6 py-3 whitespace-nowrap text-sm text-gray-600">
+                                    {account.pnl !== undefined ? (
+                                      <span className={getPnLColor(account.pnl)}>
+                                        {formatCurrency(account.pnl)}
+                                      </span>
+                                    ) : 'N/A'}
+                                  </td>
+                                </tr>
+                              ))
+                            ) : (
+                              // Individual view - show position details
+                              <tr className="bg-gray-50 border-l-4 border-primary-200">
+                                <td className="px-6 py-3 whitespace-nowrap pl-12">
+                                  <div className="text-sm text-gray-600">
+                                    <span className="font-medium">{position.account?.name || 'Unknown Account'}</span>
+                                    <span className="text-xs text-gray-400 ml-2">(Account)</span>
+                                  </div>
+                                </td>
+                                {familyView && !selectedFamilyName && (
+                                  <td className="px-6 py-3 whitespace-nowrap">
+                                    <div className="text-sm text-gray-600">
+                                      {position.family || 'Unknown'}
+                                    </div>
+                                  </td>
+                                )}
+                                <td className="px-6 py-3 whitespace-nowrap text-sm text-gray-600">
+                                  {formatNumber(position.quantity)}
+                                </td>
+                                <td className="px-6 py-3 whitespace-nowrap text-sm text-gray-600">
+                                  {formatCurrency(position.marginBlocked || 0)}
+                                </td>
+                                <td className="px-6 py-3 whitespace-nowrap text-sm text-gray-600">
+                                  <span className={getPnLColor(-position.marketValue - position.pnl)}>
+                                    {formatCurrency(-position.marketValue - position.pnl)}
+                                    {getMarginPercentage(-position.marketValue - position.pnl, position.marginBlocked || 0)}
+                                  </span>
+                                </td>
+                                <td className="px-6 py-3 whitespace-nowrap text-sm text-gray-600">
+                                  {formatCurrency(-position.marketValue)}
+                                  {getMarginPercentage(-position.marketValue, position.marginBlocked || 0)}
+                                </td>
+                                <td className="px-6 py-3 whitespace-nowrap text-sm text-gray-600">
+                                  {formatCurrencyWithDecimals(position.averagePrice)}
+                                </td>
+                                <td className="px-6 py-3 whitespace-nowrap text-sm text-gray-600">
+                                  {formatCurrencyWithDecimals(position.lastPrice)}
+                                </td>
+                                <td className="px-6 py-3 whitespace-nowrap text-sm text-gray-600">
+                                  <span className={getPnLColor(position.pnl)}>
+                                    {formatCurrency(position.pnl)}
+                                  </span>
+                                </td>
+                              </tr>
+                            )}
+                          </>
+                        )}
+                      </React.Fragment>
+                    ))}
+                  </tbody>
                 </table>
               </div>
             ) : (
               <div className="px-6 py-8 text-center">
                 <ChartBarIcon className="h-12 w-12 text-gray-400 mx-auto" />
-                <h3 className="mt-2 text-sm font-medium text-gray-900">No positions found</h3>
+                <h3 className="mt-2 text-sm font-medium text-gray-900">
+                  {activeMonthTab === 'Overview' 
+                    ? 'No positions found' 
+                    : activeMonthTab 
+                      ? `No positions found for ${activeMonthTab}` 
+                      : 'No positions found'
+                  }
+                </h3>
                 <p className="mt-1 text-sm text-gray-500">
-                  No open positions for this account.
+                  {activeMonthTab === 'Overview'
+                    ? 'No open positions for this account.'
+                    : activeMonthTab 
+                      ? `No open positions for ${activeMonthTab} month.`
+                      : 'No open positions for this account.'
+                  }
                 </p>
                 {hasConnectionError && (
                   <p className="mt-2 text-xs text-yellow-600">
