@@ -6,6 +6,7 @@ export interface SymbolAndMargin {
   id: number;
   symbolPrefix: string;
   margin: number;
+  symbolType: string;
   createdAt: string;
   updatedAt: string;
 }
@@ -13,11 +14,13 @@ export interface SymbolAndMargin {
 export interface CreateSymbolAndMarginData {
   symbolPrefix: string;
   margin: number;
+  symbolType: string;
 }
 
 export interface UpdateSymbolAndMarginData {
   symbolPrefix: string;
   margin: number;
+  symbolType: string;
 }
 
 // Get all symbol and margin records

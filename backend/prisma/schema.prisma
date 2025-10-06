@@ -176,6 +176,7 @@ model SymbolAndMargin {
   id           Int      @id @default(autoincrement())
   symbolPrefix String   @unique
   margin       Float
+  symbolType   String   @default("equity")
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
 

@@ -34,6 +34,7 @@ interface Message {
 interface SymbolAndMarginFormData {
   symbolPrefix: string;
   margin: string;
+  symbolType: string;
 }
 
 export default function SymbolAndMargins() {
@@ -43,6 +44,7 @@ export default function SymbolAndMargins() {
   const [formData, setFormData] = useState<SymbolAndMarginFormData>({
     symbolPrefix: '',
     margin: '',
+    symbolType: 'equity',
   });
 
   const queryClient = useQueryClient();
@@ -139,12 +141,14 @@ export default function SymbolAndMargins() {
       setFormData({
         symbolPrefix: record.symbolPrefix,
         margin: record.margin.toString(),
+        symbolType: record.symbolType,
       });
     } else {
       setEditingRecord(null);
       setFormData({
         symbolPrefix: '',
         margin: '',
+        symbolType: 'equity',
       });
     }
     setOpenDialog(true);
@@ -156,6 +160,7 @@ export default function SymbolAndMargins() {
     setFormData({
       symbolPrefix: '',
       margin: '',
+      symbolType: 'equity',
     });
   };
 
@@ -177,11 +182,13 @@ export default function SymbolAndMargins() {
         id: editingRecord.id,
         symbolPrefix: formData.symbolPrefix.trim(),
         margin: marginValue,
+        symbolType: formData.symbolType,
       });
     } else {
       addRecordMutation.mutate({
         symbolPrefix: formData.symbolPrefix.trim(),
         margin: marginValue,
+        symbolType: formData.symbolType,
       });
     }
   };
@@ -270,6 +277,9 @@ export default function SymbolAndMargins() {
                   Margin
                 </th>
                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                  Symbol Type
+                </th>
+                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
                   Created
                 </th>
                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
@@ -288,6 +298,17 @@ export default function SymbolAndMargins() {
                   </td>
                   <td className="px-6 py-4 whitespace-nowrap">
                     <div className="text-sm text-gray-900">{record.margin.toFixed(2)}</div>
+                  </td>
+                  <td className="px-6 py-4 whitespace-nowrap">
+                    <span className={`inline-flex px-2 py-1 text-xs font-semibold rounded-full ${
+                      record.symbolType === 'equity' ? 'bg-blue-100 text-blue-800' :
+                      record.symbolType === 'commodity' ? 'bg-orange-100 text-orange-800' :
+                      record.symbolType === 'currency' ? 'bg-green-100 text-green-800' :
+                      record.symbolType === 'debt' ? 'bg-purple-100 text-purple-800' :
+                      'bg-gray-100 text-gray-800'
+                    }`}>
+                      {record.symbolType.charAt(0).toUpperCase() + record.symbolType.slice(1)}
+                    </span>
                   </td>
                   <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
                     {formatDate(record.createdAt)}
@@ -385,6 +406,23 @@ export default function SymbolAndMargins() {
                           required
                         />
                       </div>
+                    </div>
+                    
+                    <div className="mt-4">
+                      <label className="block text-sm font-medium text-gray-700">
+                        Symbol Type *
+                      </label>
+                      <select
+                        value={formData.symbolType}
+                        onChange={(e) => setFormData({ ...formData, symbolType: e.target.value })}
+                        className="mt-1 block w-full border border-gray-300 rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-primary-500 focus:border-primary-500"
+                        required
+                      >
+                        <option value="equity">Equity</option>
+                        <option value="commodity">Commodity</option>
+                        <option value="currency">Currency</option>
+                        <option value="debt">Debt</option>
+                      </select>
                     </div>
                   </div>
                   <div className="mt-6 flex justify-end space-x-3">

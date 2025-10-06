@@ -77,16 +77,21 @@ router.post('/', [
     .withMessage('Symbol prefix must be a string between 1 and 50 characters'),
   body('margin')
     .isFloat({ min: 0 })
-    .withMessage('Margin must be a positive number')
+    .withMessage('Margin must be a positive number'),
+  body('symbolType')
+    .isString()
+    .isIn(['equity', 'commodity', 'currency', 'debt'])
+    .withMessage('Symbol type must be one of: equity, commodity, currency, debt')
 ], validateRequest, async (req, res) => {
   try {
-    const { symbolPrefix, margin } = req.body;
-    logger.info(`Creating new symbol and margin record: ${symbolPrefix} with margin: ${margin}`);
+    const { symbolPrefix, margin, symbolType } = req.body;
+    logger.info(`Creating new symbol and margin record: ${symbolPrefix} with margin: ${margin} and type: ${symbolType}`);
     
     const record = await prisma.symbolAndMargin.create({
       data: {
         symbolPrefix,
-        margin: parseFloat(margin)
+        margin: parseFloat(margin),
+        symbolType: symbolType || 'equity'
       }
     });
 
@@ -119,12 +124,16 @@ router.put('/:id', [
     .withMessage('Symbol prefix must be a string between 1 and 50 characters'),
   body('margin')
     .isFloat({ min: 0 })
-    .withMessage('Margin must be a positive number')
+    .withMessage('Margin must be a positive number'),
+  body('symbolType')
+    .isString()
+    .isIn(['equity', 'commodity', 'currency', 'debt'])
+    .withMessage('Symbol type must be one of: equity, commodity, currency, debt')
 ], validateRequest, async (req, res) => {
   try {
     const { id } = req.params;
-    const { symbolPrefix, margin } = req.body;
-    logger.info(`Updating symbol and margin record ID: ${id} with prefix: ${symbolPrefix} and margin: ${margin}`);
+    const { symbolPrefix, margin, symbolType } = req.body;
+    logger.info(`Updating symbol and margin record ID: ${id} with prefix: ${symbolPrefix}, margin: ${margin}, and type: ${symbolType}`);
     
     // Check if record exists
     const existingRecord = await prisma.symbolAndMargin.findUnique({
@@ -140,7 +149,8 @@ router.put('/:id', [
       where: { id: parseInt(id) },
       data: {
         symbolPrefix,
-        margin: parseFloat(margin)
+        margin: parseFloat(margin),
+        symbolType: symbolType || 'equity'
       }
     });
 
@@ -246,25 +256,29 @@ router.post('/sync-commodities', async (req, res) => {
         });
         
         if (existingRecord) {
-          // Update existing record if margin is different
-          if (existingRecord.margin !== margin) {
+          // Update existing record if margin is different or symbolType is not commodity
+          if (existingRecord.margin !== margin || existingRecord.symbolType !== 'commodity') {
             await prisma.symbolAndMargin.update({
               where: { id: existingRecord.id },
-              data: { margin }
+              data: { 
+                margin,
+                symbolType: 'commodity'
+              }
             });
             updatedCount++;
-            logger.info(`Updated margin for ${symbol}: ${existingRecord.margin} -> ${margin}`);
+            logger.info(`Updated margin and symbolType for ${symbol}: ${existingRecord.margin} -> ${margin}, type -> commodity`);
           }
         } else {
           // Create new record
           await prisma.symbolAndMargin.create({
             data: {
               symbolPrefix: symbol,
-              margin
+              margin,
+              symbolType: 'commodity'
             }
           });
           createdCount++;
-          logger.info(`Created new record for ${symbol} with margin: ${margin}`);
+          logger.info(`Created new record for ${symbol} with margin: ${margin} and type: commodity`);
         }
       } catch (error) {
         logger.error(`Error processing symbol ${symbol}:`, error);
@@ -344,25 +358,29 @@ router.post('/sync-equities', async (req, res) => {
         });
         
         if (existingRecord) {
-          // Update existing record if margin is different
-          if (existingRecord.margin !== margin) {
+          // Update existing record if margin is different or symbolType is not equity
+          if (existingRecord.margin !== margin || existingRecord.symbolType !== 'equity') {
             await prisma.symbolAndMargin.update({
               where: { id: existingRecord.id },
-              data: { margin }
+              data: { 
+                margin,
+                symbolType: 'equity'
+              }
             });
             updatedCount++;
-            logger.info(`Updated margin for ${symbol}: ${existingRecord.margin} -> ${margin}`);
+            logger.info(`Updated margin and symbolType for ${symbol}: ${existingRecord.margin} -> ${margin}, type -> equity`);
           }
         } else {
           // Create new record
           await prisma.symbolAndMargin.create({
             data: {
               symbolPrefix: symbol,
-              margin
+              margin,
+              symbolType: 'equity'
             }
           });
           createdCount++;
-          logger.info(`Created new record for ${symbol} with margin: ${margin}`);
+          logger.info(`Created new record for ${symbol} with margin: ${margin} and type: equity`);
         }
       } catch (error) {
         logger.error(`Error processing symbol ${symbol}:`, error);
