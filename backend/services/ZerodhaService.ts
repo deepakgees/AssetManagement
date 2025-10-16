@@ -287,6 +287,12 @@ export async function getProfile(apiKey: string, requestToken: string, apiSecret
 export async function syncHoldings(existingAccount: any) {
     return executeWithRetry(async () => {
         console.log('Fetching holdings for account:', existingAccount.id);
+        
+        // Validate session before making API call
+        if (!kc || !currentAccessToken) {
+            throw new Error('Session not initialized. Please login again.');
+        }
+        
         const holdings = await kc!.getHoldings();
         console.log('Raw holdings data:', holdings);
         
@@ -308,8 +314,7 @@ export async function syncHoldings(existingAccount: any) {
             t1Quantity: holding.t1_quantity,
             realisedQuantity: holding.realised_quantity,
             accountId: existingAccount.id,
-            createdAt: new Date(),
-            updatedAt: new Date(),
+            // Remove explicit createdAt and updatedAt - let Prisma handle these
         }));
       
         // Clear existing holdings for this account
@@ -321,11 +326,18 @@ export async function syncHoldings(existingAccount: any) {
       
         // Insert new holdings
         if (holdingsData.length > 0) {
-            await Promise.all([
-                prisma.holding.createMany({
-                    data: holdingsData
-                }),
-            ]);
+            try {
+                console.log(`Inserting ${holdingsData.length} holdings for account ${existingAccount.id}`);
+                await prisma.holding.createMany({
+                    data: holdingsData,
+                    skipDuplicates: true // Skip duplicates to avoid constraint errors
+                });
+                console.log(`Successfully inserted ${holdingsData.length} holdings`);
+            } catch (dbError: any) {
+                console.error('Database error while inserting holdings:', dbError.message);
+                console.error('Sample holdings data:', holdingsData.slice(0, 2));
+                throw new Error(`Database Error: ${dbError.message}`);
+            }
         }
         
         console.log(`Successfully synced ${holdingsData.length} holdings for account ${existingAccount.id}`);
@@ -337,6 +349,12 @@ export async function syncHoldings(existingAccount: any) {
 export async function syncPositions(existingAccount: any) {
     return executeWithRetry(async () => {
         console.log('Fetching positions for account:', existingAccount.id);
+        
+        // Validate session before making API call
+        if (!kc || !currentAccessToken) {
+            throw new Error('Session not initialized. Please login again.');
+        }
+        
         const positionsResponse = await kc!.getPositions();
         
         // Debug: Log all position symbols to understand what we're getting
@@ -379,8 +397,7 @@ export async function syncPositions(existingAccount: any) {
                 product: String(position.product || 'UNKNOWN'),
                 side: quantity > 0 ? 'BUY' : quantity < 0 ? 'SELL' : 'NONE',
                 accountId: existingAccount.id,
-                createdAt: new Date(),
-                updatedAt: new Date(),
+                // Remove explicit createdAt and updatedAt - let Prisma handle these
             };
         });
 
@@ -394,20 +411,21 @@ export async function syncPositions(existingAccount: any) {
         ]);
 
         // Insert new positions 
+        if (allPositions.length > 0) {
             try {
                 console.log('Sample position data being inserted:', allPositions[0]);
                 console.log('🔍 Debug - All positions being inserted:', allPositions.map(p => p.tradingSymbol));
-                await Promise.all([      
-                    prisma.position.createMany({
-                        data: allPositions
-                    })
-                ]);
+                await prisma.position.createMany({
+                    data: allPositions,
+                    skipDuplicates: true // Skip duplicates to avoid constraint errors
+                });
                 console.log(`Successfully inserted ${allPositions.length} positions into database`);
             } catch (dbError: any) {
                 console.error('Database insertion error:', dbError.message);
                 console.error('Sample problematic data:', allPositions.slice(0, 2));
-                throw dbError;
+                throw new Error(`Database Error: ${dbError.message}`);
             }
+        }
         
 
         console.log(`Successfully synced ${filteredNetPositions.length} net positions for account ${existingAccount.id} (skipped all day positions)`);        
@@ -419,42 +437,52 @@ export async function syncPositions(existingAccount: any) {
 export async function syncMargins(existingAccount: any) {
     return executeWithRetry(async () => {
         console.log('Fetching margins for account:', existingAccount.id);
+        
+        // Validate session before making API call
+        if (!kc || !currentAccessToken) {
+            throw new Error('Session not initialized. Please login again.');
+        }
+        
         const margins = await kc!.getMargins('equity');
         console.log('Raw margins data:', margins);
         
-        // Extract the utilized portion of margins data
-        const marginData = {
-            accountId: existingAccount.id,
-            segment: margins.segment || 'EQUITY',
-            enabled: margins.enabled || true,
-            net: parseFloat(margins.net || 0),
-            debits: parseFloat(margins.utilised?.debits || 0),
-            payout: parseFloat(margins.utilised?.payout || 0),
-            liquidCollateral: parseFloat(margins.utilised?.liquid_collateral || 0),
-            stockCollateral: parseFloat(margins.utilised?.stock_collateral || 0),
-            span: parseFloat(margins.utilised?.span || 0),
-            exposure: parseFloat(margins.utilised?.exposure || 0),
-            additional: parseFloat(margins.utilised?.additional || 0),
-            delivery: parseFloat(margins.utilised?.delivery || 0),
-            optionPremium: parseFloat(margins.utilised?.option_premium || 0),
-            holdingSales: parseFloat(margins.utilised?.holding_sales || 0),
-            turnover: parseFloat(margins.utilised?.turnover || 0),
-            equity: parseFloat(margins.utilised?.equity || 0),
-            m2mRealised: parseFloat(margins.utilised?.m2m_realised || 0),
-            m2mUnrealised: parseFloat(margins.utilised?.m2m_unrealised || 0),
-            createdAt: new Date(),
-            updatedAt: new Date(),
-        };
-        
-        // Clear existing margins for this account
+        // Clear existing margins for this account first
         await prisma.margin.deleteMany({
             where: { accountId: existingAccount.id }
         });
         
-        // Insert new margin data
-        await prisma.margin.create({
-            data: marginData
-        });
+        // Insert new margin data - explicitly construct the data object to avoid any unwanted fields
+        try {
+            const marginData = {
+                accountId: existingAccount.id,
+                segment: margins.segment || 'EQUITY',
+                enabled: margins.enabled || true,
+                net: parseFloat(margins.net || 0),
+                debits: parseFloat(margins.utilised?.debits || 0),
+                payout: parseFloat(margins.utilised?.payout || 0),
+                liquidCollateral: parseFloat(margins.utilised?.liquid_collateral || 0),
+                stockCollateral: parseFloat(margins.utilised?.stock_collateral || 0),
+                span: parseFloat(margins.utilised?.span || 0),
+                exposure: parseFloat(margins.utilised?.exposure || 0),
+                additional: parseFloat(margins.utilised?.additional || 0),
+                delivery: parseFloat(margins.utilised?.delivery || 0),
+                optionPremium: parseFloat(margins.utilised?.option_premium || 0),
+                holdingSales: parseFloat(margins.utilised?.holding_sales || 0),
+                turnover: parseFloat(margins.utilised?.turnover || 0),
+                equity: parseFloat(margins.utilised?.equity || 0),
+                m2mRealised: parseFloat(margins.utilised?.m2m_realised || 0),
+                m2mUnrealised: parseFloat(margins.utilised?.m2m_unrealised || 0),
+            };
+            
+            await prisma.margin.create({
+                data: marginData
+            });
+            console.log(`Successfully inserted margin data for account ${existingAccount.id}`);
+        } catch (dbError: any) {
+            console.error('Database error while inserting margin data:', dbError.message);
+            console.error('Raw margins data:', margins);
+            throw new Error(`Database Error: ${dbError.message}`);
+        }
         
         console.log(`Successfully synced margins for account ${existingAccount.id}`);
         return margins;

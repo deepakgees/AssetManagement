@@ -196,3 +196,47 @@ model FundTransaction {
 
   @@map("fund_transactions")
 }
+
+model HistoricalData {
+  id        Int      @id @default(autoincrement())
+  symbol    String
+  date      DateTime
+  open      Float
+  high      Float
+  low       Float
+  close     Float
+  volume    Int?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([symbol, date], name: "unique_symbol_date")
+  @@map("historical_data")
+}
+
+model HistoricalPriceCommodities {
+  id            Int      @id @default(autoincrement())
+  symbol        String
+  year          Int
+  month         Int
+  closingPrice  Float
+  percentChange Float?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  @@unique([symbol, year, month], name: "unique_commodity_symbol_year_month")
+  @@map("historical_price_commodities")
+}
+
+model HistoricalPriceEquity {
+  id            Int      @id @default(autoincrement())
+  symbol        String
+  year          Int
+  month         Int
+  closingPrice  Float
+  percentChange Float?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  @@unique([symbol, year, month], name: "unique_equity_symbol_year_month")
+  @@map("historical_price_equity")
+}

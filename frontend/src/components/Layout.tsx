@@ -8,6 +8,7 @@ import {
   Bars3Icon,
   XMarkIcon,
   TagIcon,
+  ClockIcon,
 } from '@heroicons/react/24/outline';
 
 interface LayoutProps {
@@ -25,6 +26,7 @@ const Layout: React.FC<LayoutProps> = ({ children }) => {
     { name: 'P&L', href: '/pnl', icon: CurrencyDollarIcon },
     { name: 'Dividends', href: '/dividends', icon: CurrencyDollarIcon },
     { name: 'Symbol & Margins', href: '/symbolAndMargins', icon: TagIcon },
+    { name: 'Historical Data', href: '/historicalData', icon: ClockIcon },
   ];
 
   return (

@@ -3,7 +3,7 @@ import cors from 'cors';
 import helmet from 'helmet';
 import dotenv from 'dotenv';
 import { LoggedPrismaClient } from './utils/dbLogger';
-import logger from './utils/logger';
+import logger, { cleanupOldLogs } from './utils/logger';
 import { requestLogger, errorLogger } from './middleware/requestLogger';
 
 // Import routes
@@ -17,9 +17,13 @@ import pnlRoutes from './routes/pnl';
 import dividendRoutes from './routes/dividends';
 import symbolAndMarginsRoutes from './routes/symbolAndMargins';
 import fundTransactionRoutes from './routes/fundTransactions';
+import historicalDataRoutes from './routes/historicalData';
 
 // Load environment variables
 dotenv.config();
+
+// Clean up old log files on startup
+cleanupOldLogs();
 
 const app = express();
 const prisma = new LoggedPrismaClient();
@@ -62,6 +66,7 @@ app.use('/api/pnl', pnlRoutes);
 app.use('/api/dividends', dividendRoutes);
 app.use('/api/symbolAndMargins', symbolAndMarginsRoutes);
 app.use('/api/fundTransactions', fundTransactionRoutes);
+app.use('/api/historicalData', historicalDataRoutes);
 
 // Direct auth routes (for easier redirect handling) - must be before 404 handler
 app.use('/captureToken', captureTokenRoutes);

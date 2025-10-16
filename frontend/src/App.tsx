@@ -7,6 +7,7 @@ import Positions from './pages/Positions';
 import PnL from './pages/PnL';
 import Dividends from './pages/Dividends';
 import SymbolAndMargins from './pages/SymbolAndMargins';
+import HistoricalData from './pages/HistoricalData';
 
 // Create React Query client
 const queryClient = new QueryClient({
@@ -31,6 +32,7 @@ function App() {
             <Route path="/pnl" element={<PnL />} />
             <Route path="/dividends" element={<Dividends />} />
             <Route path="/symbolAndMargins" element={<SymbolAndMargins />} />
+            <Route path="/historicalData" element={<HistoricalData />} />
           </Routes>
         </div>
       </Router>

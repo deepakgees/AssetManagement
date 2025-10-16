@@ -19,3 +19,5 @@ REM Run pg_dump (update the path if needed)
 
 
 echo Backup successfully created: %BACKUP_FILE%
+
+exit

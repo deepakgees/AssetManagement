@@ -21,7 +21,8 @@
     "logs:errors": "node scripts/log-analyzer.js errors",
     "logs:http": "node scripts/log-analyzer.js http",
     "logs:recent": "node scripts/log-analyzer.js recent",
-    "logs:search": "node scripts/log-analyzer.js search"
+    "logs:search": "node scripts/log-analyzer.js search",
+    "logs:cleanup": "ts-node scripts/cleanup-old-logs.ts"
   },
   "dependencies": {
     "@prisma/client": "^6.16.2",
