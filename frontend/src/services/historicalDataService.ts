@@ -76,18 +76,11 @@ export interface HistoricalDataStats {
   latestDate: string | null;
 }
 
-// Get historical data with optional filters
+// Get historical data with optional filters - DISABLED (historical_data table removed)
 export const getHistoricalData = async (filters?: HistoricalDataFilters): Promise<HistoricalData[]> => {
-  const params = new URLSearchParams();
-  
-  if (filters?.symbol) params.append('symbol', filters.symbol);
-  if (filters?.startDate) params.append('startDate', filters.startDate);
-  if (filters?.endDate) params.append('endDate', filters.endDate);
-  if (filters?.limit) params.append('limit', filters.limit.toString());
-  if (filters?.symbolType) params.append('symbolType', filters.symbolType);
-
-  const response = await axios.get(`${API_BASE_URL}/historicalData?${params.toString()}`);
-  return response.data;
+  // Return empty array since historical_data table has been removed
+  // Use getHistoricalPriceCommodities or getHistoricalPriceEquity instead
+  return [];
 };
 
 // Get unique symbols for dropdown
@@ -99,36 +92,64 @@ export const getSymbols = async (symbolType?: string): Promise<string[]> => {
   return response.data;
 };
 
-// Get historical data statistics
+// Get historical data statistics - DISABLED (historical_data table removed)
 export const getHistoricalDataStats = async (symbol?: string, symbolType?: string): Promise<HistoricalDataStats> => {
-  const params = new URLSearchParams();
-  if (symbol) params.append('symbol', symbol);
-  if (symbolType) params.append('symbolType', symbolType);
-  
-  const response = await axios.get(`${API_BASE_URL}/historicalData/stats?${params.toString()}`);
+  // Return empty stats since historical_data table has been removed
+  return {
+    totalRecords: 0,
+    earliestDate: null,
+    latestDate: null,
+  };
+};
+
+// Get commodity statistics with top falls
+export const getCommodityStats = async (): Promise<Array<{
+  symbol: string;
+  totalRecords: number;
+  topFalls: Array<{
+    year: number;
+    month: number;
+    percentChange: number;
+    closingPrice: number;
+  }>;
+  timeRange: string;
+}>> => {
+  const response = await axios.get(`${API_BASE_URL}/historicalData/commodities/stats`);
   return response.data;
 };
 
-// Create new historical data record
+// Get commodity price data for chart (last 5 years)
+export const getCommodityChartData = async (): Promise<Array<{
+  symbol: string;
+  data: Array<{
+    date: string;
+    price: number;
+    year: number;
+    month: number;
+  }>;
+}>> => {
+  const response = await axios.get(`${API_BASE_URL}/historicalData/commodities/chart-data`);
+  return response.data;
+};
+
+// Create new historical data record - DISABLED (historical_data table removed)
 export const createHistoricalData = async (data: CreateHistoricalDataData): Promise<HistoricalData> => {
-  const response = await axios.post(`${API_BASE_URL}/historicalData`, data);
-  return response.data;
+  throw new Error('Historical data table has been removed. Use createCommodityData instead.');
 };
 
-// Update historical data record
+// Update historical data record - DISABLED (historical_data table removed)
 export const updateHistoricalData = async (id: number, data: UpdateHistoricalDataData): Promise<HistoricalData> => {
-  const response = await axios.put(`${API_BASE_URL}/historicalData/${id}`, data);
-  return response.data;
+  throw new Error('Historical data table has been removed. Use updateCommodityData instead.');
 };
 
-// Delete historical data record
+// Delete historical data record - DISABLED (historical_data table removed)
 export const deleteHistoricalData = async (id: number): Promise<void> => {
-  await axios.delete(`${API_BASE_URL}/historicalData/${id}`);
+  throw new Error('Historical data table has been removed. Use deleteCommodityData instead.');
 };
 
 
 // Get historical price commodities data
-export const getHistoricalPriceCommodities = async (filters?: { symbol?: string; startYear?: number; endYear?: number; startMonth?: number; endMonth?: number; limit?: number }): Promise<HistoricalPriceCommodity[]> => {
+export const getHistoricalPriceCommodities = async (filters?: { symbol?: string; startYear?: number; endYear?: number; startMonth?: number; endMonth?: number; limit?: number; offset?: number }): Promise<{ data: HistoricalPriceCommodity[]; totalCount: number; currentPage: number; totalPages: number; hasNextPage: boolean; hasPreviousPage: boolean }> => {
   const params = new URLSearchParams();
   
   if (filters?.symbol) params.append('symbol', filters.symbol);
@@ -137,6 +158,7 @@ export const getHistoricalPriceCommodities = async (filters?: { symbol?: string;
   if (filters?.startMonth) params.append('startMonth', filters.startMonth.toString());
   if (filters?.endMonth) params.append('endMonth', filters.endMonth.toString());
   if (filters?.limit) params.append('limit', filters.limit.toString());
+  if (filters?.offset) params.append('offset', filters.offset.toString());
 
   const response = await axios.get(`${API_BASE_URL}/historicalData/commodities?${params.toString()}`);
   return response.data;

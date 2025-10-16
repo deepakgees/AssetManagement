@@ -197,21 +197,6 @@ model FundTransaction {
   @@map("fund_transactions")
 }
 
-model HistoricalData {
-  id        Int      @id @default(autoincrement())
-  symbol    String
-  date      DateTime
-  open      Float
-  high      Float
-  low       Float
-  close     Float
-  volume    Int?
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-
-  @@unique([symbol, date], name: "unique_symbol_date")
-  @@map("historical_data")
-}
 
 model HistoricalPriceCommodities {
   id            Int      @id @default(autoincrement())

@@ -10,7 +10,6 @@ import {
   CheckCircleIcon,
   ExclamationTriangleIcon,
   InformationCircleIcon,
-  FunnelIcon,
   ChartBarIcon,
 } from '@heroicons/react/24/outline';
 import Layout from '../components/Layout';
@@ -30,13 +29,14 @@ import {
   getEquitySymbols,
   getHistoricalPriceEquity,
   bulkUploadCommodityData,
+  getCommodityStats,
+  getCommodityChartData,
   type HistoricalData,
   type HistoricalPriceCommodity,
   type CreateHistoricalDataData,
   type CreateCommodityData,
   type UpdateHistoricalDataData,
   type UpdateCommodityData,
-  type HistoricalDataFilters,
 } from '../services/historicalDataService';
 
 interface Message {
@@ -69,7 +69,6 @@ export default function HistoricalData() {
   const [openDialog, setOpenDialog] = useState(false);
   const [editingRecord, setEditingRecord] = useState<HistoricalData | HistoricalPriceCommodity | null>(null);
   const [messages, setMessages] = useState<Message[]>([]);
-  const [showFilters, setShowFilters] = useState(false);
   const [showEquityDownload, setShowEquityDownload] = useState(false);
   const [formData, setFormData] = useState<HistoricalDataFormData>({
     symbol: '',
@@ -90,9 +89,6 @@ export default function HistoricalData() {
   const [calculatedPercentChange, setCalculatedPercentChange] = useState<number | null>(null);
   const [previousMonthData, setPreviousMonthData] = useState<HistoricalPriceCommodity | null>(null);
   const [isCalculatingPercent, setIsCalculatingPercent] = useState(false);
-  const [filters, setFilters] = useState<HistoricalDataFilters>({
-    limit: 100,
-  });
   const [equityDownloadData, setEquityDownloadData] = useState({
     symbol: '',
     startDate: '',
@@ -102,7 +98,31 @@ export default function HistoricalData() {
   const [csvFile, setCsvFile] = useState<File | null>(null);
   const [parsedData, setParsedData] = useState<any[]>([]);
   const [uploadSymbol, setUploadSymbol] = useState('');
+  
+  // Pagination state
+  const [currentPage, setCurrentPage] = useState(1);
+  const [itemsPerPage] = useState(10);
   const [isParsing, setIsParsing] = useState(false);
+  
+  // Chart legend state
+  const [visibleCommodities, setVisibleCommodities] = useState<Set<string>>(new Set());
+  
+  // Chart tooltip state
+  const [tooltip, setTooltip] = useState<{
+    visible: boolean;
+    x: number;
+    y: number;
+    data: {
+      symbol: string;
+      date: string;
+      price: number;
+    } | null;
+  }>({
+    visible: false,
+    x: 0,
+    y: 0,
+    data: null
+  });
 
   const queryClient = useQueryClient();
 
@@ -117,6 +137,8 @@ export default function HistoricalData() {
       return () => clearTimeout(timeoutId);
     }
   }, [commodityFormData.symbol, commodityFormData.year, commodityFormData.month, commodityFormData.closingPrice, activeTab, editingRecord]);
+
+
 
   // Message management functions
   const addMessage = (type: 'success' | 'error' | 'info', message: string) => {
@@ -140,10 +162,66 @@ export default function HistoricalData() {
     setMessages(prev => prev.filter(msg => msg.id !== messageId));
   };
 
+  // Toggle commodity visibility in chart
+  const toggleCommodityVisibility = (symbol: string) => {
+    setVisibleCommodities(prev => {
+      const newSet = new Set(prev);
+      if (newSet.has(symbol)) {
+        newSet.delete(symbol);
+      } else {
+        newSet.add(symbol);
+      }
+      return newSet;
+    });
+  };
+
+  // Handle tooltip interactions
+  const handleMouseMove = (event: React.MouseEvent<SVGSVGElement>, chartData: any[], visibleData: any[], xScale: (date: Date) => number, yScale: (price: number) => number) => {
+    const rect = event.currentTarget.getBoundingClientRect();
+    const mouseX = event.clientX - rect.left;
+    const mouseY = event.clientY - rect.top;
+    
+    // Find the closest data point
+    let closestData = null;
+    let minDistance = Infinity;
+    
+    visibleData.forEach(commodity => {
+      commodity.data.forEach((point: any) => {
+        const x = xScale(new Date(point.date));
+        const y = yScale(point.price);
+        const distance = Math.sqrt(Math.pow(mouseX - x, 2) + Math.pow(mouseY - y, 2));
+        
+        if (distance < minDistance && distance < 20) { // 20px threshold
+          minDistance = distance;
+          closestData = {
+            symbol: commodity.symbol,
+            date: point.date,
+            price: point.price
+          };
+        }
+      });
+    });
+    
+    if (closestData) {
+      setTooltip({
+        visible: true,
+        x: event.clientX,
+        y: event.clientY,
+        data: closestData
+      });
+    } else {
+      setTooltip(prev => ({ ...prev, visible: false }));
+    }
+  };
+
+  const handleMouseLeave = () => {
+    setTooltip(prev => ({ ...prev, visible: false }));
+  };
+
   // API calls
   const { data: records, isLoading } = useQuery({
-    queryKey: ['historicalData', filters, activeTab],
-    queryFn: () => getHistoricalData({ ...filters, symbolType: activeTab }),
+    queryKey: ['historicalData', activeTab],
+    queryFn: () => getHistoricalData({ symbolType: activeTab }),
     refetchInterval: 30000,
   });
 
@@ -153,16 +231,48 @@ export default function HistoricalData() {
   });
 
   const { data: stats } = useQuery({
-    queryKey: ['historicalDataStats', filters.symbol, activeTab],
-    queryFn: () => getHistoricalDataStats(filters.symbol, activeTab),
+    queryKey: ['historicalDataStats', activeTab],
+    queryFn: () => getHistoricalDataStats(undefined, activeTab),
   });
 
-  // Fetch commodities data when on commodities tab
-  const { data: commoditiesData } = useQuery({
-    queryKey: ['historicalPriceCommodities', activeTab],
-    queryFn: () => getHistoricalPriceCommodities({ limit: 100 }),
+  // Fetch commodity statistics with top gains and falls
+  const { data: commodityStats } = useQuery({
+    queryKey: ['commodityStats'],
+    queryFn: getCommodityStats,
     enabled: activeTab === 'commodities',
   });
+
+  // Fetch commodity chart data for last 5 years
+  const { data: chartData } = useQuery({
+    queryKey: ['commodityChartData'],
+    queryFn: getCommodityChartData,
+    enabled: activeTab === 'commodities',
+  });
+
+  // Effect to initialize visible commodities when chart data loads
+  useEffect(() => {
+    if (chartData && chartData.length > 0) {
+      setVisibleCommodities(new Set(chartData.map(commodity => commodity.symbol)));
+    }
+  }, [chartData]);
+
+  // Fetch commodities data when on commodities tab
+  const { data: commoditiesResponse } = useQuery({
+    queryKey: ['historicalPriceCommodities', activeTab, currentPage, itemsPerPage],
+    queryFn: () => getHistoricalPriceCommodities({ 
+      limit: itemsPerPage, 
+      offset: (currentPage - 1) * itemsPerPage
+    }),
+    enabled: activeTab === 'commodities',
+  });
+
+  const commoditiesData = commoditiesResponse?.data || [];
+  const paginationInfo = commoditiesResponse ? {
+    totalCount: commoditiesResponse.totalCount,
+    totalPages: commoditiesResponse.totalPages,
+    hasNextPage: commoditiesResponse.hasNextPage,
+    hasPreviousPage: commoditiesResponse.hasPreviousPage
+  } : null;
 
   // Fetch equity symbols
   const { data: equitySymbols } = useQuery({
@@ -172,12 +282,11 @@ export default function HistoricalData() {
 
   // Fetch equity data when on equities tab
   const { data: equityData } = useQuery({
-    queryKey: ['historicalPriceEquity', filters.symbol],
+    queryKey: ['historicalPriceEquity'],
     queryFn: () => getHistoricalPriceEquity({ 
-      symbol: filters.symbol, 
       limit: 120 
     }),
-    enabled: activeTab === 'equities' && !!filters.symbol,
+    enabled: activeTab === 'equities',
   });
 
   const addRecordMutation = useMutation({
@@ -514,18 +623,6 @@ export default function HistoricalData() {
     }
   };
 
-  const handleFilterChange = (key: keyof HistoricalDataFilters, value: string | number | undefined) => {
-    setFilters(prev => ({
-      ...prev,
-      [key]: value,
-    }));
-  };
-
-  const clearFilters = () => {
-    setFilters({
-      limit: 100,
-    });
-  };
 
   const handleEquityDownload = () => {
     if (!equityDownloadData.symbol) {
@@ -699,13 +796,6 @@ export default function HistoricalData() {
       <div className="mb-6 flex justify-between items-center">
         <h1 className="text-2xl font-bold text-gray-900">Historical Data Management</h1>
         <div className="flex space-x-3">
-          <button
-            onClick={() => setShowFilters(!showFilters)}
-            className="inline-flex items-center px-4 py-2 border border-gray-300 text-sm font-medium rounded-md shadow-sm text-gray-700 bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-primary-500"
-          >
-            <FunnelIcon className="h-4 w-4 mr-2" />
-            {showFilters ? 'Hide' : 'Show'} Filters
-          </button>
           {activeTab === 'equities' && (
             <button
               onClick={() => setShowEquityDownload(!showEquityDownload)}
@@ -955,121 +1045,212 @@ export default function HistoricalData() {
         </div>
       )}
 
-      {/* Statistics Cards */}
-      {stats && (
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-6">
-          <div className="bg-white overflow-hidden shadow rounded-lg">
-            <div className="p-5">
-              <div className="flex items-center">
-                <div className="flex-shrink-0">
-                  <ChartBarIcon className="h-6 w-6 text-gray-400" />
+
+      {/* Commodity Statistics Cards */}
+      {activeTab === 'commodities' && commodityStats && (
+        <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-3 mb-6">
+          {commodityStats.map((commodity) => (
+            <div key={commodity.symbol} className="bg-white overflow-hidden shadow rounded-lg">
+              <div className="p-3">
+                <div className="flex items-center justify-between mb-3">
+                  <div className="flex items-center">
+                    <div className="flex-shrink-0">
+                      <ChartBarIcon className="h-4 w-4 text-gray-400" />
+                    </div>
+                    <div className="ml-2">
+                      <h3 className="text-sm font-medium text-gray-900">{commodity.symbol}</h3>
+                      <p className="text-xs text-gray-500">{commodity.timeRange}</p>
+                    </div>
+                  </div>
                 </div>
-                <div className="ml-5 w-0 flex-1">
-                  <dl>
-                    <dt className="text-sm font-medium text-gray-500 truncate">Total Records</dt>
-                    <dd className="text-lg font-medium text-gray-900">{stats.totalRecords.toLocaleString()}</dd>
-                  </dl>
-                </div>
-              </div>
-            </div>
-          </div>
-          <div className="bg-white overflow-hidden shadow rounded-lg">
-            <div className="p-5">
-              <div className="flex items-center">
-                <div className="flex-shrink-0">
-                  <ChartBarIcon className="h-6 w-6 text-gray-400" />
-                </div>
-                <div className="ml-5 w-0 flex-1">
-                  <dl>
-                    <dt className="text-sm font-medium text-gray-500 truncate">Earliest Date</dt>
-                    <dd className="text-lg font-medium text-gray-900">
-                      {stats.earliestDate ? formatDate(stats.earliestDate) : 'N/A'}
-                    </dd>
-                  </dl>
-                </div>
-              </div>
-            </div>
-          </div>
-          <div className="bg-white overflow-hidden shadow rounded-lg">
-            <div className="p-5">
-              <div className="flex items-center">
-                <div className="flex-shrink-0">
-                  <ChartBarIcon className="h-6 w-6 text-gray-400" />
-                </div>
-                <div className="ml-5 w-0 flex-1">
-                  <dl>
-                    <dt className="text-sm font-medium text-gray-500 truncate">Latest Date</dt>
-                    <dd className="text-lg font-medium text-gray-900">
-                      {stats.latestDate ? formatDate(stats.latestDate) : 'N/A'}
-                    </dd>
-                  </dl>
+                
+                <div className="grid grid-cols-1 gap-2">
+                  {/* Top Falls */}
+                  <div>
+                    <h4 className="text-xs font-medium text-red-600 mb-1">Top 3 Falls</h4>
+                    <div className="space-y-1">
+                      {commodity.topFalls.length > 0 ? (
+                        commodity.topFalls.map((fall, index) => (
+                          <div key={index} className="flex justify-between items-center text-xs">
+                            <span className="text-gray-600 truncate">
+                              {new Date(fall.year, fall.month - 1).toLocaleDateString('en-US', { month: 'short', year: '2-digit' })}
+                            </span>
+                            <span className="font-medium text-red-600 ml-1">
+                              {fall.percentChange.toFixed(1)}%
+                            </span>
+                          </div>
+                        ))
+                      ) : (
+                        <p className="text-xs text-gray-400">No data</p>
+                      )}
+                    </div>
+                  </div>
                 </div>
               </div>
             </div>
-          </div>
+          ))}
         </div>
       )}
 
-      {/* Filters */}
-      {showFilters && (
+      {/* Price Chart for Last 5 Years */}
+      {activeTab === 'commodities' && chartData && chartData.length > 0 && (
         <div className="bg-white shadow rounded-lg mb-6">
           <div className="px-6 py-4 border-b border-gray-200">
-            <h3 className="text-lg font-medium text-gray-900">Filters</h3>
+            <h3 className="text-lg font-medium text-gray-900">Commodity Price Trends (Last 5 Years)</h3>
           </div>
-          <div className="px-6 py-4">
-            <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Symbol</label>
-                <select
-                  value={filters.symbol || ''}
-                  onChange={(e) => handleFilterChange('symbol', e.target.value || undefined)}
-                  className="block w-full border border-gray-300 rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-primary-500 focus:border-primary-500"
-                >
-                  <option value="">All Symbols</option>
-                  {symbols?.map((symbol) => (
-                    <option key={symbol} value={symbol}>
-                      {symbol}
-                    </option>
-                  ))}
-                </select>
-              </div>
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Start Date</label>
-                <input
-                  type="date"
-                  value={filters.startDate || ''}
-                  onChange={(e) => handleFilterChange('startDate', e.target.value || undefined)}
-                  className="block w-full border border-gray-300 rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-primary-500 focus:border-primary-500"
-                />
-              </div>
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">End Date</label>
-                <input
-                  type="date"
-                  value={filters.endDate || ''}
-                  onChange={(e) => handleFilterChange('endDate', e.target.value || undefined)}
-                  className="block w-full border border-gray-300 rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-primary-500 focus:border-primary-500"
-                />
-              </div>
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Limit</label>
-                <input
-                  type="number"
-                  min="1"
-                  max="1000"
-                  value={filters.limit || 100}
-                  onChange={(e) => handleFilterChange('limit', parseInt(e.target.value) || 100)}
-                  className="block w-full border border-gray-300 rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-primary-500 focus:border-primary-500"
-                />
-              </div>
+          <div className="p-6">
+            {/* Interactive Legend */}
+            <div className="mb-4 flex flex-wrap gap-4">
+              {chartData.map((commodity, index) => {
+                const colors = ['#3B82F6', '#EF4444', '#10B981', '#F59E0B', '#8B5CF6'];
+                const isVisible = visibleCommodities.has(commodity.symbol);
+                const color = colors[index % colors.length];
+                
+                return (
+                  <button
+                    key={commodity.symbol}
+                    onClick={() => toggleCommodityVisibility(commodity.symbol)}
+                    className={`flex items-center space-x-2 px-3 py-2 rounded-md text-sm font-medium transition-colors ${
+                      isVisible 
+                        ? 'bg-gray-100 text-gray-900 hover:bg-gray-200' 
+                        : 'bg-gray-50 text-gray-500 hover:bg-gray-100'
+                    }`}
+                  >
+                    <div 
+                      className="w-4 h-0.5 rounded"
+                      style={{ backgroundColor: isVisible ? color : '#D1D5DB' }}
+                    />
+                    <span className={isVisible ? 'text-gray-900' : 'text-gray-500'}>
+                      {commodity.symbol}
+                    </span>
+                  </button>
+                );
+              })}
             </div>
-            <div className="mt-4">
-              <button
-                onClick={clearFilters}
-                className="inline-flex items-center px-3 py-2 border border-gray-300 text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50"
-              >
-                Clear Filters
-              </button>
+            
+            <div className="h-96 w-full relative">
+              {(() => {
+                if (!chartData || chartData.length === 0) return null;
+                
+                const colors = ['#3B82F6', '#EF4444', '#10B981', '#F59E0B', '#8B5CF6'];
+                const margin = { top: 20, right: 50, bottom: 40, left: 60 };
+                const width = 800 - margin.left - margin.right;
+                const height = 300 - margin.top - margin.bottom;
+                
+                // Filter data to only visible commodities
+                const visibleData = chartData.filter(commodity => visibleCommodities.has(commodity.symbol));
+                
+                if (visibleData.length === 0) {
+                  return (
+                    <svg width="100%" height="100%" viewBox="0 0 800 300" className="border border-gray-200 rounded">
+                      <text x="400" y="150" textAnchor="middle" fontSize="16" fill="#6B7280">
+                        Select commodities from the legend above to view chart
+                      </text>
+                    </svg>
+                  );
+                }
+                
+                // Get all dates and prices for scaling (only from visible commodities)
+                const allDates = visibleData.flatMap(commodity => commodity.data.map(d => new Date(d.date)));
+                const allPrices = visibleData.flatMap(commodity => commodity.data.map(d => d.price));
+                
+                const minDate = new Date(Math.min(...allDates.map(d => d.getTime())));
+                const maxDate = new Date(Math.max(...allDates.map(d => d.getTime())));
+                const minPrice = Math.min(...allPrices);
+                const maxPrice = Math.max(...allPrices);
+                
+                const xScale = (date: Date) => margin.left + ((date.getTime() - minDate.getTime()) / (maxDate.getTime() - minDate.getTime())) * width;
+                const yScale = (price: number) => margin.top + height - ((price - minPrice) / (maxPrice - minPrice)) * height;
+                  
+                // Create path for each commodity
+                const createPath = (data: any[]) => {
+                  if (data.length === 0) return '';
+                  const pathData = data.map((point, index) => {
+                    const x = xScale(new Date(point.date));
+                    const y = yScale(point.price);
+                    return `${index === 0 ? 'M' : 'L'} ${x} ${y}`;
+                  }).join(' ');
+                  return pathData;
+                };
+                
+                return (
+                  <svg 
+                    width="100%" 
+                    height="100%" 
+                    viewBox="0 0 800 300" 
+                    className="border border-gray-200 rounded cursor-crosshair"
+                    onMouseMove={(e) => handleMouseMove(e, chartData, visibleData, xScale, yScale)}
+                    onMouseLeave={handleMouseLeave}
+                  >
+                    {/* Y-axis */}
+                    <line x1={margin.left} y1={margin.top} x2={margin.left} y2={margin.top + height} stroke="#E5E7EB" strokeWidth="1" />
+                    
+                    {/* X-axis */}
+                    <line x1={margin.left} y1={margin.top + height} x2={margin.left + width} y2={margin.top + height} stroke="#E5E7EB" strokeWidth="1" />
+                    
+                    {/* Y-axis labels */}
+                    {[minPrice, (minPrice + maxPrice) / 2, maxPrice].map((price, index) => (
+                      <g key={index}>
+                        <line x1={margin.left - 5} y1={yScale(price)} x2={margin.left} y2={yScale(price)} stroke="#E5E7EB" strokeWidth="1" />
+                        <text x={margin.left - 10} y={yScale(price) + 4} textAnchor="end" fontSize="12" fill="#6B7280">
+                          ₹{price.toFixed(0)}
+                        </text>
+                      </g>
+                    ))}
+                    
+                    {/* X-axis labels */}
+                    {[0, 0.25, 0.5, 0.75, 1].map((ratio, index) => {
+                      const date = new Date(minDate.getTime() + ratio * (maxDate.getTime() - minDate.getTime()));
+                      return (
+                        <g key={index}>
+                          <line x1={xScale(date)} y1={margin.top + height} x2={xScale(date)} y2={margin.top + height + 5} stroke="#E5E7EB" strokeWidth="1" />
+                          <text x={xScale(date)} y={margin.top + height + 20} textAnchor="middle" fontSize="12" fill="#6B7280">
+                            {date.getFullYear()}
+                          </text>
+                        </g>
+                      );
+                    })}
+                    
+                    {/* Chart lines - only for visible commodities */}
+                    {visibleData.map((commodity, index) => {
+                      const originalIndex = chartData.findIndex(c => c.symbol === commodity.symbol);
+                      return (
+                        <g key={commodity.symbol}>
+                          <path
+                            d={createPath(commodity.data)}
+                            fill="none"
+                            stroke={colors[originalIndex % colors.length]}
+                            strokeWidth="2"
+                          />
+                        </g>
+                      );
+                    })}
+                  </svg>
+                );
+              })()}
+              
+              {/* Tooltip */}
+              {tooltip.visible && tooltip.data && (
+                <div
+                  className="absolute bg-gray-900 text-white text-sm rounded-lg px-3 py-2 pointer-events-none z-10 shadow-lg"
+                  style={{
+                    left: tooltip.x + 10,
+                    top: tooltip.y - 40,
+                    transform: 'translateX(-50%)'
+                  }}
+                >
+                  <div className="font-medium">{tooltip.data.symbol}</div>
+                  <div className="text-gray-300">
+                    {new Date(tooltip.data.date).toLocaleDateString('en-US', { 
+                      year: 'numeric', 
+                      month: 'short' 
+                    })}
+                  </div>
+                  <div className="text-yellow-400 font-medium">
+                    ₹{tooltip.data.price.toFixed(2)}
+                  </div>
+                </div>
+              )}
             </div>
           </div>
         </div>
@@ -1088,6 +1269,89 @@ export default function HistoricalData() {
             Manage historical price data for {activeTab === 'commodities' ? 'commodity' : 'equity'} symbols
           </p>
         </div>
+
+        {/* Pagination Controls for Commodities - Top */}
+        {activeTab === 'commodities' && paginationInfo && paginationInfo.totalPages > 1 && (
+          <div className="bg-white px-4 py-3 flex items-center justify-between border-b border-gray-200 sm:px-6">
+            <div className="flex-1 flex justify-between sm:hidden">
+              <button
+                onClick={() => setCurrentPage(prev => Math.max(1, prev - 1))}
+                disabled={!paginationInfo.hasPreviousPage}
+                className="relative inline-flex items-center px-4 py-2 border border-gray-300 text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                Previous
+              </button>
+              <button
+                onClick={() => setCurrentPage(prev => Math.min(paginationInfo.totalPages, prev + 1))}
+                disabled={!paginationInfo.hasNextPage}
+                className="ml-3 relative inline-flex items-center px-4 py-2 border border-gray-300 text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                Next
+              </button>
+            </div>
+            <div className="hidden sm:flex-1 sm:flex sm:items-center sm:justify-between">
+              <div>
+                <p className="text-sm text-gray-700">
+                  Showing{' '}
+                  <span className="font-medium">{(currentPage - 1) * itemsPerPage + 1}</span>
+                  {' '}to{' '}
+                  <span className="font-medium">
+                    {Math.min(currentPage * itemsPerPage, paginationInfo.totalCount)}
+                  </span>
+                  {' '}of{' '}
+                  <span className="font-medium">{paginationInfo.totalCount}</span>
+                  {' '}results
+                </p>
+              </div>
+              <div>
+                <nav className="relative z-0 inline-flex rounded-md shadow-sm -space-x-px" aria-label="Pagination">
+                  <button
+                    onClick={() => setCurrentPage(prev => Math.max(1, prev - 1))}
+                    disabled={!paginationInfo.hasPreviousPage}
+                    className="relative inline-flex items-center px-2 py-2 rounded-l-md border border-gray-300 bg-white text-sm font-medium text-gray-500 hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
+                  >
+                    <span className="sr-only">Previous</span>
+                    <svg className="h-5 w-5" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
+                      <path fillRule="evenodd" d="M12.707 5.293a1 1 0 010 1.414L9.414 10l3.293 3.293a1 1 0 01-1.414 1.414l-4-4a1 1 0 010-1.414l4-4a1 1 0 011.414 0z" clipRule="evenodd" />
+                    </svg>
+                  </button>
+                  
+                  {/* Page numbers */}
+                  {Array.from({ length: Math.min(5, paginationInfo.totalPages) }, (_, i) => {
+                    const startPage = Math.max(1, currentPage - 2);
+                    const pageNum = startPage + i;
+                    if (pageNum > paginationInfo.totalPages) return null;
+                    
+                    return (
+                      <button
+                        key={pageNum}
+                        onClick={() => setCurrentPage(pageNum)}
+                        className={`relative inline-flex items-center px-4 py-2 border text-sm font-medium ${
+                          pageNum === currentPage
+                            ? 'z-10 bg-primary-50 border-primary-500 text-primary-600'
+                            : 'bg-white border-gray-300 text-gray-500 hover:bg-gray-50'
+                        }`}
+                      >
+                        {pageNum}
+                      </button>
+                    );
+                  })}
+                  
+                  <button
+                    onClick={() => setCurrentPage(prev => Math.min(paginationInfo.totalPages, prev + 1))}
+                    disabled={!paginationInfo.hasNextPage}
+                    className="relative inline-flex items-center px-2 py-2 rounded-r-md border border-gray-300 bg-white text-sm font-medium text-gray-500 hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
+                  >
+                    <span className="sr-only">Next</span>
+                    <svg className="h-5 w-5" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
+                      <path fillRule="evenodd" d="M7.293 14.707a1 1 0 010-1.414L10.586 10 7.293 6.707a1 1 0 011.414-1.414l4 4a1 1 0 010 1.414l-4 4a1 1 0 01-1.414 0z" clipRule="evenodd" />
+                    </svg>
+                  </button>
+                </nav>
+              </div>
+            </div>
+          </div>
+        )}
 
         <div className="overflow-x-auto">
           <table className="min-w-full divide-y divide-gray-200">

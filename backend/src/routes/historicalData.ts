@@ -9,43 +9,11 @@ const prisma = new PrismaClient();
 // Get historical data with optional filters
 router.get('/', async (req, res) => {
   try {
-    const { symbol, startDate, endDate, limit = 100, symbolType } = req.query;
+    const { symbolType } = req.query;
 
-    const where: any = {};
-    
-    if (symbol) {
-      where.symbol = symbol as string;
-    }
-    
-    if (symbolType) {
-      // Join with symbol_and_margins table to filter by symbol type
-      where.symbol = {
-        in: await prisma.symbolAndMargin.findMany({
-          where: { symbolType: symbolType as string },
-          select: { symbolPrefix: true }
-        }).then(results => results.map(r => r.symbolPrefix))
-      };
-    }
-    
-    if (startDate || endDate) {
-      where.date = {};
-      if (startDate) {
-        where.date.gte = new Date(startDate as string);
-      }
-      if (endDate) {
-        where.date.lte = new Date(endDate as string);
-      }
-    }
-
-    const historicalData = await prisma.historicalData.findMany({
-      where,
-      orderBy: {
-        date: 'desc',
-      },
-      take: parseInt(limit as string),
-    });
-
-    res.json(historicalData);
+    // For now, return empty array since historical_data table is removed
+    // This endpoint can be used to return data from other historical tables if needed
+    res.json([]);
   } catch (error) {
     console.error('Error fetching historical data:', error);
     res.status(500).json({ error: 'Failed to fetch historical data' });
@@ -57,44 +25,14 @@ router.get('/symbols', async (req, res) => {
   try {
     const { symbolType } = req.query;
     
-    let symbols;
-    
-    if (symbolType) {
-      // Get symbols that match the symbol type from symbol_and_margins table
-      const symbolPrefixes = await prisma.symbolAndMargin.findMany({
-        where: { symbolType: symbolType as string },
-        select: { symbolPrefix: true }
-      });
-      
-      const prefixList = symbolPrefixes.map(s => s.symbolPrefix);
-      
-      symbols = await prisma.historicalData.findMany({
-        where: {
-          symbol: {
-            in: prefixList
-          }
-        },
-        select: {
-          symbol: true,
-        },
-        distinct: ['symbol'],
-        orderBy: {
-          symbol: 'asc',
-        },
-      });
-    } else {
-      symbols = await prisma.historicalData.findMany({
-        select: {
-          symbol: true,
-        },
-        distinct: ['symbol'],
-        orderBy: {
-          symbol: 'asc',
-        },
-      });
-    }
+    // Return symbols from symbol_and_margins table instead of historical_data
+    const symbolPrefixes = await prisma.symbolAndMargin.findMany({
+      where: symbolType ? { symbolType: symbolType as string } : {},
+      select: { symbolPrefix: true },
+      orderBy: { symbolPrefix: 'asc' }
+    });
 
-    res.json(symbols.map(item => item.symbol));
+    res.json(symbolPrefixes.map(item => item.symbolPrefix));
   } catch (error) {
     console.error('Error fetching symbols:', error);
     res.status(500).json({ error: 'Failed to fetch symbols' });
@@ -104,40 +42,11 @@ router.get('/symbols', async (req, res) => {
 // Get historical data statistics
 router.get('/stats', async (req, res) => {
   try {
-    const { symbol, symbolType } = req.query;
-
-    const where: any = {};
-    if (symbol) {
-      where.symbol = symbol as string;
-    }
-    
-    if (symbolType) {
-      // Join with symbol_and_margins table to filter by symbol type
-      where.symbol = {
-        in: await prisma.symbolAndMargin.findMany({
-          where: { symbolType: symbolType as string },
-          select: { symbolPrefix: true }
-        }).then(results => results.map(r => r.symbolPrefix))
-      };
-    }
-
-    const stats = await prisma.historicalData.aggregate({
-      where,
-      _count: {
-        id: true,
-      },
-      _min: {
-        date: true,
-      },
-      _max: {
-        date: true,
-      },
-    });
-
+    // Return empty stats since historical_data table is removed
     res.json({
-      totalRecords: stats._count.id,
-      earliestDate: stats._min.date,
-      latestDate: stats._max.date,
+      totalRecords: 0,
+      earliestDate: null,
+      latestDate: null,
     });
   } catch (error) {
     console.error('Error fetching historical data stats:', error);
@@ -145,74 +54,160 @@ router.get('/stats', async (req, res) => {
   }
 });
 
-// Add new historical data record
-router.post('/', async (req, res) => {
+// Get commodity statistics with top gains and falls
+router.get('/commodities/stats', async (req, res) => {
   try {
-    const { symbol, date, open, high, low, close, volume } = req.body;
+    // Get all unique commodity symbols
+    const symbols = await prisma.historicalPriceCommodities.findMany({
+      select: { symbol: true },
+      distinct: ['symbol'],
+      orderBy: { symbol: 'asc' }
+    });
 
-    if (!symbol || !date || open === undefined || high === undefined || low === undefined || close === undefined) {
-      return res.status(400).json({ error: 'Missing required fields' });
+    const commodityStats = [];
+
+    for (const { symbol } of symbols) {
+      // Get all records for this symbol
+      const records = await prisma.historicalPriceCommodities.findMany({
+        where: { symbol },
+        orderBy: [
+          { year: 'desc' },
+          { month: 'desc' }
+        ]
+      });
+
+      // Calculate top 3 falls
+      const recordsWithPercentChange = records.filter(record => record.percentChange !== null);
+      
+      const topFalls = recordsWithPercentChange
+        .sort((a, b) => (a.percentChange || 0) - (b.percentChange || 0))
+        .slice(0, 3)
+        .map(record => ({
+          year: record.year,
+          month: record.month,
+          percentChange: record.percentChange,
+          closingPrice: record.closingPrice
+        }));
+
+      // Calculate time range for all data (not just top 3 falls)
+      let timeRange = "No data";
+      if (records.length > 0) {
+        const years = records.map(record => record.year);
+        const months = records.map(record => record.month);
+        const minYear = Math.min(...years);
+        const maxYear = Math.max(...years);
+        const minMonth = Math.min(...months.filter((_, index) => years[index] === minYear));
+        const maxMonth = Math.max(...months.filter((_, index) => years[index] === maxYear));
+        
+        if (minYear === maxYear) {
+          // Same year, show month range
+          const minMonthName = new Date(minYear, minMonth - 1).toLocaleDateString('en-US', { month: 'short' });
+          const maxMonthName = new Date(maxYear, maxMonth - 1).toLocaleDateString('en-US', { month: 'short' });
+          timeRange = minMonth === maxMonth ? `${minMonthName} ${minYear}` : `${minMonthName} - ${maxMonthName} ${minYear}`;
+        } else {
+          // Different years, show full range
+          const minMonthName = new Date(minYear, minMonth - 1).toLocaleDateString('en-US', { month: 'short' });
+          const maxMonthName = new Date(maxYear, maxMonth - 1).toLocaleDateString('en-US', { month: 'short' });
+          timeRange = `${minMonthName} ${minYear} - ${maxMonthName} ${maxYear}`;
+        }
+      }
+
+      commodityStats.push({
+        symbol,
+        totalRecords: records.length,
+        topFalls,
+        timeRange
+      });
     }
 
-    const historicalData = await prisma.historicalData.create({
-      data: {
+    // Sort commodities in specific order: Gold, Silver, Copper, Crudeoil, NaturalGas
+    const commodityOrder = ['GOLD', 'SILVER', 'COPPER', 'CRUDEOIL', 'NATURALGAS'];
+    commodityStats.sort((a, b) => {
+      const aIndex = commodityOrder.indexOf(a.symbol.toUpperCase());
+      const bIndex = commodityOrder.indexOf(b.symbol.toUpperCase());
+      
+      // If both symbols are in the predefined order, sort by that order
+      if (aIndex !== -1 && bIndex !== -1) {
+        return aIndex - bIndex;
+      }
+      
+      // If only one symbol is in the predefined order, prioritize it
+      if (aIndex !== -1) return -1;
+      if (bIndex !== -1) return 1;
+      
+      // If neither symbol is in the predefined order, sort alphabetically
+      return a.symbol.localeCompare(b.symbol);
+    });
+
+    res.json(commodityStats);
+  } catch (error) {
+    console.error('Error fetching commodity statistics:', error);
+    res.status(500).json({ error: 'Failed to fetch commodity statistics' });
+  }
+});
+
+// Get commodity price data for chart (last 5 years)
+router.get('/commodities/chart-data', async (req, res) => {
+  try {
+    const currentYear = new Date().getFullYear();
+    const fiveYearsAgo = currentYear - 5;
+    
+    // Get all unique commodity symbols
+    const symbols = await prisma.historicalPriceCommodities.findMany({
+      select: { symbol: true },
+      distinct: ['symbol'],
+      orderBy: { symbol: 'asc' }
+    });
+
+    const chartData = [];
+
+    for (const { symbol } of symbols) {
+      // Get price data for the last 5 years
+      const records = await prisma.historicalPriceCommodities.findMany({
+        where: { 
+          symbol,
+          year: { gte: fiveYearsAgo }
+        },
+        orderBy: [
+          { year: 'asc' },
+          { month: 'asc' }
+        ]
+      });
+
+      // Transform data for chart
+      const priceData = records.map(record => ({
+        date: new Date(record.year, record.month - 1, 1).toISOString().split('T')[0],
+        price: record.closingPrice,
+        year: record.year,
+        month: record.month
+      }));
+
+      chartData.push({
         symbol,
-        date: new Date(date),
-        open: parseFloat(open),
-        high: parseFloat(high),
-        low: parseFloat(low),
-        close: parseFloat(close),
-        volume: volume ? parseInt(volume) : null,
-      },
-    });
+        data: priceData
+      });
+    }
 
-    res.status(201).json(historicalData);
+    res.json(chartData);
   } catch (error) {
-    console.error('Error creating historical data:', error);
-    res.status(500).json({ error: 'Failed to create historical data' });
+    console.error('Error fetching commodity chart data:', error);
+    res.status(500).json({ error: 'Failed to fetch commodity chart data' });
   }
 });
 
-// Update historical data record
+// Add new historical data record - DISABLED (historical_data table removed)
+router.post('/', async (req, res) => {
+  res.status(410).json({ error: 'Historical data table has been removed. Use commodities or equity endpoints instead.' });
+});
+
+// Update historical data record - DISABLED (historical_data table removed)
 router.put('/:id', async (req, res) => {
-  try {
-    const { id } = req.params;
-    const { symbol, date, open, high, low, close, volume } = req.body;
-
-    const historicalData = await prisma.historicalData.update({
-      where: { id: parseInt(id) },
-      data: {
-        ...(symbol && { symbol }),
-        ...(date && { date: new Date(date) }),
-        ...(open !== undefined && { open: parseFloat(open) }),
-        ...(high !== undefined && { high: parseFloat(high) }),
-        ...(low !== undefined && { low: parseFloat(low) }),
-        ...(close !== undefined && { close: parseFloat(close) }),
-        ...(volume !== undefined && { volume: volume ? parseInt(volume) : null }),
-      },
-    });
-
-    res.json(historicalData);
-  } catch (error) {
-    console.error('Error updating historical data:', error);
-    res.status(500).json({ error: 'Failed to update historical data' });
-  }
+  res.status(410).json({ error: 'Historical data table has been removed. Use commodities or equity endpoints instead.' });
 });
 
-// Delete historical data record
+// Delete historical data record - DISABLED (historical_data table removed)
 router.delete('/:id', async (req, res) => {
-  try {
-    const { id } = req.params;
-
-    await prisma.historicalData.delete({
-      where: { id: parseInt(id) },
-    });
-
-    res.status(204).send();
-  } catch (error) {
-    console.error('Error deleting historical data:', error);
-    res.status(500).json({ error: 'Failed to delete historical data' });
-  }
+  res.status(410).json({ error: 'Historical data table has been removed. Use commodities or equity endpoints instead.' });
 });
 
 // Download MCX GOLD data for last 10 years
@@ -240,7 +235,7 @@ router.post('/download-mcx-gold', async (req, res) => {
 // Get historical price commodities data
 router.get('/commodities', async (req, res) => {
   try {
-    const { symbol, startYear, endYear, startMonth, endMonth, limit = 100 } = req.query;
+    const { symbol, startYear, endYear, startMonth, endMonth, limit = 100, offset = 0 } = req.query;
 
     const where: any = {};
     
@@ -268,6 +263,9 @@ router.get('/commodities', async (req, res) => {
       }
     }
 
+    // Get total count for pagination
+    const totalCount = await prisma.historicalPriceCommodities.count({ where });
+
     const data = await prisma.historicalPriceCommodities.findMany({
       where,
       orderBy: [
@@ -275,9 +273,17 @@ router.get('/commodities', async (req, res) => {
         { month: 'desc' }
       ],
       take: parseInt(limit as string),
+      skip: parseInt(offset as string),
     });
 
-    res.json(data);
+    res.json({
+      data,
+      totalCount,
+      currentPage: Math.floor(parseInt(offset as string) / parseInt(limit as string)) + 1,
+      totalPages: Math.ceil(totalCount / parseInt(limit as string)),
+      hasNextPage: parseInt(offset as string) + parseInt(limit as string) < totalCount,
+      hasPreviousPage: parseInt(offset as string) > 0
+    });
   } catch (error) {
     console.error('Error fetching historical price commodities:', error);
     res.status(500).json({ error: 'Failed to fetch historical price commodities' });
