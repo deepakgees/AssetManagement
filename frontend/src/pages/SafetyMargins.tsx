@@ -1,0 +1,448 @@
+import { useState } from 'react';
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { Dialog, Transition } from '@headlessui/react';
+import { Fragment } from 'react';
+import {
+  PlusIcon,
+  PencilIcon,
+  TrashIcon,
+  XMarkIcon,
+  CheckCircleIcon,
+  ExclamationTriangleIcon,
+  InformationCircleIcon,
+} from '@heroicons/react/24/outline';
+import Layout from '../components/Layout';
+import { 
+  getSafetyMargins, 
+  createSafetyMargin, 
+  updateSafetyMargin, 
+  deleteSafetyMargin,
+  type SafetyMargin,
+  type CreateSafetyMarginData,
+  type UpdateSafetyMarginData
+} from '../services/safetyMarginsService';
+
+interface Message {
+  id: string;
+  type: 'success' | 'error' | 'info';
+  message: string;
+  timestamp: Date;
+}
+
+interface SafetyMarginFormData {
+  symbol: string;
+  safetyMargin: string;
+  type: string;
+}
+
+export default function SafetyMargins() {
+  const [openDialog, setOpenDialog] = useState(false);
+  const [editingRecord, setEditingRecord] = useState<SafetyMargin | null>(null);
+  const [messages, setMessages] = useState<Message[]>([]);
+  const [formData, setFormData] = useState<SafetyMarginFormData>({
+    symbol: '',
+    safetyMargin: '',
+    type: 'commodity',
+  });
+
+  const queryClient = useQueryClient();
+
+  // Message management functions
+  const addMessage = (type: 'success' | 'error' | 'info', message: string) => {
+    const newMessage: Message = {
+      id: Date.now().toString(),
+      type,
+      message,
+      timestamp: new Date(),
+    };
+    setMessages(prev => [...prev, newMessage]);
+    
+    // Auto-remove success and info messages after 5 seconds
+    if (type === 'success' || type === 'info') {
+      setTimeout(() => {
+        removeMessage(newMessage.id);
+      }, 5000);
+    }
+  };
+
+  const removeMessage = (messageId: string) => {
+    setMessages(prev => prev.filter(msg => msg.id !== messageId));
+  };
+
+  // API calls
+  const { data: records, isLoading } = useQuery({
+    queryKey: ['safetyMargins'],
+    queryFn: getSafetyMargins,
+    refetchInterval: 30000,
+  });
+
+  const addRecordMutation = useMutation({
+    mutationFn: (newRecord: CreateSafetyMarginData) => createSafetyMargin(newRecord),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['safetyMargins'] });
+      handleCloseDialog();
+      addMessage('success', 'Safety margin record created successfully!');
+    },
+    onError: (error: any) => {
+      addMessage('error', `Failed to create record: ${error.response?.data?.message || error.message}`);
+    },
+  });
+
+  const updateRecordMutation = useMutation({
+    mutationFn: ({ id, ...data }: { id: number } & UpdateSafetyMarginData) => updateSafetyMargin(id, data),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['safetyMargins'] });
+      handleCloseDialog();
+      addMessage('success', 'Safety margin record updated successfully!');
+    },
+    onError: (error: any) => {
+      addMessage('error', `Failed to update record: ${error.response?.data?.message || error.message}`);
+    },
+  });
+
+  const deleteRecordMutation = useMutation({
+    mutationFn: deleteSafetyMargin,
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['safetyMargins'] });
+      addMessage('success', 'Safety margin record deleted successfully!');
+    },
+    onError: (error: any) => {
+      addMessage('error', `Failed to delete record: ${error.response?.data?.message || error.message}`);
+    },
+  });
+
+  const handleOpenDialog = (record?: SafetyMargin) => {
+    if (record) {
+      setEditingRecord(record);
+      setFormData({
+        symbol: record.symbol,
+        safetyMargin: record.safetyMargin.toString(),
+        type: record.type,
+      });
+    } else {
+      setEditingRecord(null);
+      setFormData({
+        symbol: '',
+        safetyMargin: '',
+        type: 'commodity',
+      });
+    }
+    setOpenDialog(true);
+  };
+
+  const handleCloseDialog = () => {
+    setOpenDialog(false);
+    setEditingRecord(null);
+    setFormData({
+      symbol: '',
+      safetyMargin: '',
+      type: 'commodity',
+    });
+  };
+
+  const handleSubmit = () => {
+    if (!formData.symbol.trim()) {
+      addMessage('error', 'Please fill in the symbol');
+      return;
+    }
+
+    if (!formData.safetyMargin.trim() || isNaN(parseFloat(formData.safetyMargin)) || parseFloat(formData.safetyMargin) < 0 || parseFloat(formData.safetyMargin) > 100) {
+      addMessage('error', 'Please enter a valid safety margin value between 0 and 100');
+      return;
+    }
+
+    const safetyMarginValue = parseFloat(formData.safetyMargin);
+
+    if (editingRecord) {
+      updateRecordMutation.mutate({
+        id: editingRecord.id,
+        symbol: formData.symbol.trim(),
+        safetyMargin: safetyMarginValue,
+        type: formData.type,
+      });
+    } else {
+      addRecordMutation.mutate({
+        symbol: formData.symbol.trim(),
+        safetyMargin: safetyMarginValue,
+        type: formData.type,
+      });
+    }
+  };
+
+  const handleDelete = (recordId: number) => {
+    if (window.confirm('Are you sure you want to delete this safety margin record?')) {
+      deleteRecordMutation.mutate(recordId);
+    }
+  };
+
+  const formatDate = (dateString: string) => {
+    return new Date(dateString).toLocaleString();
+  };
+
+  if (isLoading) {
+    return (
+      <Layout>
+        <div className="flex justify-center items-center h-64">
+          <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-primary-600"></div>
+        </div>
+      </Layout>
+    );
+  }
+
+  return (
+    <Layout>
+      <div className="mb-6 flex justify-between items-center">
+        <h1 className="text-2xl font-bold text-gray-900">Safety Margins Management</h1>
+        <button
+          onClick={() => handleOpenDialog()}
+          className="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md shadow-sm text-white bg-primary-600 hover:bg-primary-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-primary-500"
+        >
+          <PlusIcon className="h-4 w-4 mr-2" />
+          Add Safety Margin
+        </button>
+      </div>
+
+      <div className="bg-white shadow rounded-lg">
+        <div className="px-6 py-4 border-b border-gray-200">
+          <h2 className="text-lg font-medium text-gray-900">
+            Safety Margin Records ({records?.length || 0})
+          </h2>
+          <p className="text-sm text-gray-600 mt-1">
+            Manage safety margins for equities and commodities to determine put option strike prices
+          </p>
+        </div>
+
+        <div className="overflow-x-auto">
+          <table className="min-w-full divide-y divide-gray-200">
+            <thead className="bg-gray-50">
+              <tr>
+                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                  Symbol
+                </th>
+                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                  Safety Margin (%)
+                </th>
+                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                  Type
+                </th>
+                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                  Created
+                </th>
+                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                  Updated
+                </th>
+                <th className="px-6 py-3 text-center text-xs font-medium text-gray-500 uppercase tracking-wider">
+                  Actions
+                </th>
+              </tr>
+            </thead>
+            <tbody className="bg-white divide-y divide-gray-200">
+              {records?.map((record) => (
+                <tr key={record.id} className="hover:bg-gray-50">
+                  <td className="px-6 py-4 whitespace-nowrap">
+                    <div className="text-sm font-medium text-gray-900">{record.symbol}</div>
+                  </td>
+                  <td className="px-6 py-4 whitespace-nowrap">
+                    <div className="text-sm text-gray-900">{record.safetyMargin.toFixed(2)}%</div>
+                  </td>
+                  <td className="px-6 py-4 whitespace-nowrap">
+                    <span className={`inline-flex px-2 py-1 text-xs font-semibold rounded-full ${
+                      record.type === 'equity' ? 'bg-blue-100 text-blue-800' :
+                      record.type === 'commodity' ? 'bg-orange-100 text-orange-800' :
+                      'bg-gray-100 text-gray-800'
+                    }`}>
+                      {record.type.charAt(0).toUpperCase() + record.type.slice(1)}
+                    </span>
+                  </td>
+                  <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                    {formatDate(record.createdAt)}
+                  </td>
+                  <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                    {formatDate(record.updatedAt)}
+                  </td>
+                  <td className="px-6 py-4 whitespace-nowrap text-center text-sm font-medium">
+                    <button
+                      onClick={() => handleOpenDialog(record)}
+                      className="text-primary-600 hover:text-primary-900 mr-3"
+                      title="Edit Record"
+                    >
+                      <PencilIcon className="h-4 w-4" />
+                    </button>
+                    <button
+                      onClick={() => handleDelete(record.id)}
+                      className="text-red-600 hover:text-red-900"
+                      title="Delete Record"
+                    >
+                      <TrashIcon className="h-4 w-4" />
+                    </button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+
+        {records?.length === 0 && (
+          <div className="text-center py-12">
+            <div className="text-gray-500 text-lg">No safety margin records found</div>
+            <div className="text-gray-400 text-sm mt-2">Click "Add Safety Margin" to create your first record</div>
+          </div>
+        )}
+      </div>
+
+      {/* Add/Edit Record Dialog */}
+      <Transition.Root show={openDialog} as={Fragment}>
+        <Dialog as="div" className="relative z-50" onClose={handleCloseDialog}>
+          <Transition.Child
+            as={Fragment}
+            enter="ease-out duration-300"
+            enterFrom="opacity-0"
+            enterTo="opacity-100"
+            leave="ease-in duration-200"
+            leaveFrom="opacity-100"
+            leaveTo="opacity-0"
+          >
+            <div className="fixed inset-0 bg-gray-500 bg-opacity-75 transition-opacity" />
+          </Transition.Child>
+
+          <div className="fixed inset-0 z-10 overflow-y-auto">
+            <div className="flex min-h-full items-end justify-center p-4 text-center sm:items-center sm:p-0">
+              <Transition.Child
+                as={Fragment}
+                enter="ease-out duration-300"
+                enterFrom="opacity-0 translate-y-4 sm:translate-y-0 sm:scale-95"
+                enterTo="opacity-100 translate-y-0 sm:scale-100"
+                leave="ease-in duration-200"
+                leaveFrom="opacity-100 translate-y-0 sm:scale-100"
+                leaveTo="opacity-0 translate-y-4 sm:translate-y-0 sm:scale-95"
+              >
+                <Dialog.Panel className="relative transform overflow-hidden rounded-lg bg-white px-4 pb-4 pt-5 text-left shadow-xl transition-all sm:my-8 sm:w-full sm:max-w-lg sm:p-6">
+                  <div>
+                    <Dialog.Title as="h3" className="text-lg font-medium leading-6 text-gray-900 mb-4">
+                      {editingRecord ? 'Edit Safety Margin Record' : 'Add New Safety Margin Record'}
+                    </Dialog.Title>
+                    <div className="space-y-4">
+                      <div>
+                        <label className="block text-sm font-medium text-gray-700">
+                          Symbol *
+                        </label>
+                        <input
+                          type="text"
+                          value={formData.symbol}
+                          onChange={(e) => setFormData({ ...formData, symbol: e.target.value })}
+                          className="mt-1 block w-full border border-gray-300 rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-primary-500 focus:border-primary-500"
+                          placeholder="e.g., RELIANCE, GOLD, SILVER"
+                          required
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-sm font-medium text-gray-700">
+                          Safety Margin (%) *
+                        </label>
+                        <input
+                          type="number"
+                          step="0.01"
+                          min="0"
+                          max="100"
+                          value={formData.safetyMargin}
+                          onChange={(e) => setFormData({ ...formData, safetyMargin: e.target.value })}
+                          className="mt-1 block w-full border border-gray-300 rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-primary-500 focus:border-primary-500"
+                          placeholder="e.g., 5.0 (for 5% safety margin)"
+                          required
+                        />
+                        <p className="mt-1 text-xs text-gray-500">
+                          Enter the percentage safety margin (0-100) for determining put option strike prices
+                        </p>
+                      </div>
+                      <div>
+                        <label className="block text-sm font-medium text-gray-700">
+                          Type *
+                        </label>
+                        <select
+                          value={formData.type}
+                          onChange={(e) => setFormData({ ...formData, type: e.target.value })}
+                          className="mt-1 block w-full border border-gray-300 rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-primary-500 focus:border-primary-500"
+                          required
+                        >
+                          <option value="commodity">Commodity</option>
+                          <option value="equity">Equity</option>
+                        </select>
+                      </div>
+                    </div>
+                  </div>
+                  <div className="mt-6 flex justify-end space-x-3">
+                    <button
+                      type="button"
+                      onClick={handleCloseDialog}
+                      className="px-4 py-2 border border-gray-300 rounded-md text-sm font-medium text-gray-700 bg-white hover:bg-gray-50"
+                    >
+                      Cancel
+                    </button>
+                    <button
+                      type="button"
+                      onClick={handleSubmit}
+                      disabled={addRecordMutation.isPending || updateRecordMutation.isPending}
+                      className="px-4 py-2 border border-transparent rounded-md text-sm font-medium text-white bg-primary-600 hover:bg-primary-700 disabled:opacity-50"
+                    >
+                      {editingRecord ? 'Update' : 'Add'} Record
+                    </button>
+                  </div>
+                </Dialog.Panel>
+              </Transition.Child>
+            </div>
+          </div>
+        </Dialog>
+      </Transition.Root>
+
+      {/* Messages Display */}
+      {messages.length > 0 && (
+        <div className="fixed bottom-4 right-4 z-50 space-y-2 max-w-md">
+          {messages.map((message) => (
+            <div
+              key={message.id}
+              className={`flex items-center p-4 rounded-lg shadow-lg border-l-4 ${
+                message.type === 'success'
+                  ? 'bg-green-50 border-green-400 text-green-800'
+                  : message.type === 'error'
+                  ? 'bg-red-50 border-red-400 text-red-800'
+                  : 'bg-blue-50 border-blue-400 text-blue-800'
+              }`}
+            >
+              <div className="flex-shrink-0">
+                {message.type === 'success' && (
+                  <CheckCircleIcon className="h-5 w-5 text-green-400" />
+                )}
+                {message.type === 'error' && (
+                  <ExclamationTriangleIcon className="h-5 w-5 text-red-400" />
+                )}
+                {message.type === 'info' && (
+                  <InformationCircleIcon className="h-5 w-5 text-blue-400" />
+                )}
+              </div>
+              <div className="ml-3 flex-1">
+                <p className="text-sm font-medium">{message.message}</p>
+                <p className="text-xs opacity-75">
+                  {message.timestamp.toLocaleTimeString()}
+                </p>
+              </div>
+              <div className="ml-4 flex-shrink-0">
+                <button
+                  onClick={() => removeMessage(message.id)}
+                  className={`inline-flex rounded-md p-1.5 focus:outline-none focus:ring-2 focus:ring-offset-2 ${
+                    message.type === 'success'
+                      ? 'text-green-400 hover:bg-green-100 focus:ring-green-500'
+                      : message.type === 'error'
+                      ? 'text-red-400 hover:bg-red-100 focus:ring-red-500'
+                      : 'text-blue-400 hover:bg-blue-100 focus:ring-blue-500'
+                  }`}
+                >
+                  <XMarkIcon className="h-4 w-4" />
+                </button>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </Layout>
+  );
+}

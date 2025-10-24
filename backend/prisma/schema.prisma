@@ -225,3 +225,15 @@ model HistoricalPriceEquity {
   @@unique([symbol, year, month], name: "unique_equity_symbol_year_month")
   @@map("historical_price_equity")
 }
+
+model SafetyMargin {
+  id            Int      @id @default(autoincrement())
+  symbol        String
+  safetyMargin  Float
+  type          String   @default("commodity") // commodity or equity
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  @@unique([symbol, type], name: "unique_safety_margin_symbol_type")
+  @@map("safety_margins")
+}

@@ -18,6 +18,7 @@ import dividendRoutes from './routes/dividends';
 import symbolAndMarginsRoutes from './routes/symbolAndMargins';
 import fundTransactionRoutes from './routes/fundTransactions';
 import historicalDataRoutes from './routes/historicalData';
+import safetyMarginsRoutes from './routes/safetyMargins';
 
 // Load environment variables
 dotenv.config();
@@ -67,6 +68,7 @@ app.use('/api/dividends', dividendRoutes);
 app.use('/api/symbolAndMargins', symbolAndMarginsRoutes);
 app.use('/api/fundTransactions', fundTransactionRoutes);
 app.use('/api/historicalData', historicalDataRoutes);
+app.use('/api/safetyMargins', safetyMarginsRoutes);
 
 // Direct auth routes (for easier redirect handling) - must be before 404 handler
 app.use('/captureToken', captureTokenRoutes);
