@@ -112,11 +112,19 @@ router.get('/commodities/stats', async (req, res) => {
         }
       }
 
+      // Get the latest month's data (first record since we ordered by year desc, month desc)
+      const latestMonth = records.length > 0 ? records[0] : null;
+
       commodityStats.push({
         symbol,
         totalRecords: records.length,
         topFalls,
-        timeRange
+        timeRange,
+        latestMonth: latestMonth ? {
+          year: latestMonth.year,
+          month: latestMonth.month,
+          closingPrice: latestMonth.closingPrice
+        } : null
       });
     }
 
@@ -192,6 +200,79 @@ router.get('/commodities/chart-data', async (req, res) => {
   } catch (error) {
     console.error('Error fetching commodity chart data:', error);
     res.status(500).json({ error: 'Failed to fetch commodity chart data' });
+  }
+});
+
+// Get seasonal data for a specific commodity (last 10 years)
+router.get('/commodities/seasonal/:symbol', async (req, res) => {
+  try {
+    const { symbol } = req.params;
+    const currentYear = new Date().getFullYear();
+    const tenYearsAgo = currentYear - 10;
+    
+    // Get all records for the specified commodity in the last 10 years
+    const records = await prisma.historicalPriceCommodities.findMany({
+      where: { 
+        symbol,
+        year: { gte: tenYearsAgo }
+      },
+      orderBy: [
+        { year: 'desc' },
+        { month: 'desc' }
+      ]
+    });
+
+    // Transform data for seasonal chart
+    const seasonalData = records.map(record => ({
+      year: record.year,
+      month: record.month,
+      closingPrice: record.closingPrice,
+      percentChange: record.percentChange
+    }));
+
+    res.json(seasonalData);
+  } catch (error) {
+    console.error('Error fetching commodity seasonal data:', error);
+    res.status(500).json({ error: 'Failed to fetch commodity seasonal data' });
+  }
+});
+
+// Get seasonal data for all commodities (last 10 years)
+router.get('/commodities/seasonal-all', async (req, res) => {
+  try {
+    const currentYear = new Date().getFullYear();
+    const tenYearsAgo = currentYear - 10;
+    
+    // Get all records for all commodities in the last 10 years
+    const records = await prisma.historicalPriceCommodities.findMany({
+      where: { 
+        year: { gte: tenYearsAgo }
+      },
+      orderBy: [
+        { symbol: 'asc' },
+        { year: 'desc' },
+        { month: 'desc' }
+      ]
+    });
+
+    // Group by symbol
+    const seasonalDataBySymbol = records.reduce((acc, record) => {
+      if (!acc[record.symbol]) {
+        acc[record.symbol] = [];
+      }
+      acc[record.symbol].push({
+        year: record.year,
+        month: record.month,
+        closingPrice: record.closingPrice,
+        percentChange: record.percentChange
+      });
+      return acc;
+    }, {} as Record<string, any[]>);
+
+    res.json(seasonalDataBySymbol);
+  } catch (error) {
+    console.error('Error fetching all commodities seasonal data:', error);
+    res.status(500).json({ error: 'Failed to fetch all commodities seasonal data' });
   }
 });
 

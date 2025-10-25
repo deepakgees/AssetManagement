@@ -31,6 +31,8 @@ import {
   bulkUploadCommodityData,
   getCommodityStats,
   getCommodityChartData,
+  getCommoditySeasonalData,
+  getAllCommoditiesSeasonalData,
   type HistoricalData,
   type HistoricalPriceCommodity,
   type CreateHistoricalDataData,
@@ -38,6 +40,7 @@ import {
   type UpdateHistoricalDataData,
   type UpdateCommodityData,
 } from '../services/historicalDataService';
+import { getSafetyMargins, type SafetyMargin } from '../services/safetyMarginsService';
 
 interface Message {
   id: string;
@@ -63,6 +66,113 @@ interface CommodityFormData {
   closingPrice: string;
   percentChange: string;
 }
+
+// Helper function to process seasonal data into a matrix
+const processSeasonalData = (data: any[]) => {
+  if (!data) return { matrix: [], years: [], months: [] };
+  
+  const years = [...new Set(data.map(item => item.year))].sort((a, b) => b - a); // Descending order
+  const months = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12];
+  const monthNames = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+  
+  const matrix = years.map(year => {
+    const yearData = data.filter(item => item.year === year);
+    return months.map(month => {
+      const monthData = yearData.find(item => item.month === month);
+      return monthData ? {
+        percentChange: monthData.percentChange,
+        closingPrice: monthData.closingPrice
+      } : null;
+    });
+  });
+  
+  return { matrix, years, months: monthNames };
+};
+
+  // Helper function to calculate monthly success rates
+  const calculateMonthlySuccessRates = (data: any[]) => {
+    if (!data) return [];
+    
+    const months = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12];
+    return months.map(month => {
+      const monthData = data.filter(item => item.month === month && item.percentChange !== null);
+      if (monthData.length === 0) return 0;
+      
+      const positiveCount = monthData.filter(item => item.percentChange > 0).length;
+      return Math.round((positiveCount / monthData.length) * 100);
+    });
+  };
+
+
+// Seasonal Chart Table Component
+const SeasonalChartTable: React.FC<{ data: any[]; commodity: string }> = ({ data, commodity }) => {
+  const { matrix, years, months } = processSeasonalData(data);
+  const successRates = calculateMonthlySuccessRates(data);
+
+  return (
+    <div className="overflow-x-auto">
+      <table className="min-w-full border border-gray-200 rounded-lg">
+        <thead>
+          <tr className="bg-gray-50">
+            <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider border-r border-gray-200">
+              {commodity}
+            </th>
+            {months.map((month, index) => (
+              <th key={index} className="px-2 py-2 text-center text-xs font-medium text-gray-500 uppercase tracking-wider border-r border-gray-200">
+                {month}
+              </th>
+            ))}
+          </tr>
+          <tr className="bg-blue-50">
+            <td className="px-3 py-2 text-xs font-medium text-gray-700 border-r border-gray-200">
+              Success Rate
+            </td>
+            {successRates.map((rate, index) => (
+              <td key={index} className={`px-2 py-2 text-center text-xs font-medium border-r border-gray-200 ${
+                rate >= 60 ? 'text-green-600 bg-green-50' : 
+                rate >= 40 ? 'text-yellow-600 bg-yellow-50' : 
+                'text-red-600 bg-red-50'
+              }`}>
+                {rate}%
+              </td>
+            ))}
+          </tr>
+        </thead>
+        <tbody className="bg-white divide-y divide-gray-200">
+          {years.map((year, yearIndex) => (
+            <tr key={year} className="hover:bg-gray-50">
+              <td className="px-3 py-2 text-sm font-medium text-gray-900 border-r border-gray-200 bg-blue-50">
+                {year}
+              </td>
+              {matrix[yearIndex].map((cell, monthIndex) => (
+                <td key={monthIndex} className={`px-2 py-2 text-center text-xs border-r border-gray-200 ${
+                  cell ? (
+                    cell.percentChange > 0 ? 'text-green-600 bg-green-50' : 
+                    cell.percentChange < 0 ? 'text-red-600 bg-red-50' : 
+                    'text-gray-600'
+                  ) : 'text-gray-400'
+                }`}>
+                  {cell ? (
+                    <div>
+                      <div className="font-medium">
+                        {cell.percentChange > 0 ? '+' : ''}{cell.percentChange?.toFixed(2)}%
+                      </div>
+                      <div className="text-xs text-gray-500">
+                        ₹{cell.closingPrice.toFixed(0)}
+                      </div>
+                    </div>
+                  ) : (
+                    '-'
+                  )}
+                </td>
+              ))}
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+};
 
 export default function HistoricalData() {
   const [activeTab, setActiveTab] = useState<'commodities' | 'equities'>('commodities');
@@ -123,6 +233,10 @@ export default function HistoricalData() {
     y: 0,
     data: null
   });
+
+  // Seasonal chart state
+  const [selectedCommodityForSeasonal, setSelectedCommodityForSeasonal] = useState<string>('');
+  const [showSeasonalChart, setShowSeasonalChart] = useState(false);
 
   const queryClient = useQueryClient();
 
@@ -246,6 +360,27 @@ export default function HistoricalData() {
   const { data: chartData } = useQuery({
     queryKey: ['commodityChartData'],
     queryFn: getCommodityChartData,
+    enabled: activeTab === 'commodities',
+  });
+
+  // Fetch safety margins data
+  const { data: safetyMargins } = useQuery({
+    queryKey: ['safetyMargins'],
+    queryFn: getSafetyMargins,
+    enabled: activeTab === 'commodities',
+  });
+
+  // Fetch seasonal data for selected commodity
+  const { data: seasonalData, isLoading: seasonalLoading } = useQuery({
+    queryKey: ['commoditySeasonalData', selectedCommodityForSeasonal],
+    queryFn: () => getCommoditySeasonalData(selectedCommodityForSeasonal),
+    enabled: activeTab === 'commodities' && selectedCommodityForSeasonal !== '',
+  });
+
+  // Fetch seasonal data for all commodities
+  const { data: allSeasonalData } = useQuery({
+    queryKey: ['allCommoditiesSeasonalData'],
+    queryFn: getAllCommoditiesSeasonalData,
     enabled: activeTab === 'commodities',
   });
 
@@ -781,6 +916,63 @@ export default function HistoricalData() {
     return price.toFixed(2);
   };
 
+  // Helper function to get safety margin for a commodity symbol
+  const getSafetyMarginForSymbol = (symbol: string): string => {
+    if (!safetyMargins) return 'NA';
+    
+    const safetyMargin = safetyMargins.find(
+      (sm: SafetyMargin) => sm.symbol.toLowerCase() === symbol.toLowerCase() && sm.type === 'commodity'
+    );
+    
+    return safetyMargin ? `${safetyMargin.safetyMargin.toFixed(1)}%` : 'NA';
+  };
+
+  // Helper function to format month and year
+  const formatMonthYear = (year: number, month: number): string => {
+    const date = new Date(year, month - 1);
+    return date.toLocaleDateString('en-US', { month: 'short', year: '2-digit' });
+  };
+
+  // Helper function to get next month
+  const getNextMonth = (year: number, month: number): { year: number; month: number } => {
+    if (month === 12) {
+      return { year: year + 1, month: 1 };
+    }
+    return { year, month: month + 1 };
+  };
+
+  // Helper function to calculate safe put option strike price
+  const calculateSafePE = (closingPrice: number, safetyMargin: number): number => {
+    return closingPrice * (1 - safetyMargin / 100);
+  };
+
+  // Helper function to get success rate for a specific month and commodity
+  const getSuccessRateForMonth = (symbol: string, month: number): number => {
+    if (!allSeasonalData || !allSeasonalData[symbol]) {
+      return 0;
+    }
+    
+    const commodityData = allSeasonalData[symbol];
+    
+    // Filter by month and ensure percentChange is not null
+    const monthData = commodityData.filter(item => 
+      item.month === month && 
+      item.percentChange !== null
+    );
+    
+    if (monthData.length === 0) {
+      return 0;
+    }
+    
+    // Count positive returns
+    const positiveCount = monthData.filter(item => 
+      item.percentChange !== null && item.percentChange > 0
+    ).length;
+    
+    return Math.round((positiveCount / monthData.length) * 100);
+  };
+
+
   if (isLoading) {
     return (
       <Layout>
@@ -1065,6 +1257,98 @@ export default function HistoricalData() {
                 </div>
                 
                 <div className="grid grid-cols-1 gap-2">
+                  {/* Previous Month Closing Price */}
+                  {commodity.latestMonth && (
+                    <div>
+                      <div className="flex justify-between items-center text-xs">
+                        <span className="text-gray-600">
+                          {formatMonthYear(commodity.latestMonth.year, commodity.latestMonth.month)} Price
+                        </span>
+                        <span className="font-medium text-gray-900">
+                          ₹{formatPrice(commodity.latestMonth.closingPrice)}
+                        </span>
+                      </div>
+                    </div>
+                  )}
+                  
+                  {/* Safety Margin */}
+                  <div>
+                    <div className="flex justify-between items-center text-xs">
+                      <span className="text-blue-600 font-medium">Safety Margin</span>
+                      <span className={`font-medium ${
+                        getSafetyMarginForSymbol(commodity.symbol) === 'NA' 
+                          ? 'text-gray-500' 
+                          : 'text-blue-700'
+                      }`}>
+                        {getSafetyMarginForSymbol(commodity.symbol)}
+                      </span>
+                    </div>
+                  </div>
+                  
+                  {/* Safe PE */}
+                  {commodity.latestMonth && (
+                    <div>
+                      <div className="flex justify-between items-center text-xs">
+                        <span className="text-green-600 font-medium">
+                          {(() => {
+                            const nextMonth = getNextMonth(commodity.latestMonth.year, commodity.latestMonth.month);
+                            return `${formatMonthYear(nextMonth.year, nextMonth.month)} Safe PE`;
+                          })()}
+                        </span>
+                        <span className={`font-medium ${
+                          (() => {
+                            const safetyMargin = safetyMargins?.find(
+                              (sm: SafetyMargin) => sm.symbol.toLowerCase() === commodity.symbol.toLowerCase() && sm.type === 'commodity'
+                            );
+                            return safetyMargin ? 'text-green-700' : 'text-gray-500';
+                          })()
+                        }`}>
+                          {(() => {
+                            const safetyMargin = safetyMargins?.find(
+                              (sm: SafetyMargin) => sm.symbol.toLowerCase() === commodity.symbol.toLowerCase() && sm.type === 'commodity'
+                            );
+                            if (safetyMargin) {
+                              const safePE = calculateSafePE(commodity.latestMonth.closingPrice, safetyMargin.safetyMargin);
+                              return `₹${formatPrice(safePE)}`;
+                            }
+                            return 'NA';
+                          })()}
+                        </span>
+                      </div>
+                    </div>
+                  )}
+                  
+                  {/* Success Rate for Next Month */}
+                  {commodity.latestMonth && (
+                    <div>
+                      <div className="flex justify-between items-center text-xs">
+                        <span className="text-purple-600 font-medium">
+                          {(() => {
+                            const nextMonth = getNextMonth(commodity.latestMonth.year, commodity.latestMonth.month);
+                            return `${formatMonthYear(nextMonth.year, nextMonth.month)} Success Rate`;
+                          })()}
+                        </span>
+                        <span className={`font-medium ${
+                          (() => {
+                            const nextMonth = getNextMonth(commodity.latestMonth.year, commodity.latestMonth.month);
+                            const successRate = getSuccessRateForMonth(commodity.symbol, nextMonth.month);
+                            return successRate >= 60 ? 'text-green-700' : 
+                                   successRate >= 40 ? 'text-yellow-600' : 
+                                   'text-red-600';
+                          })()
+                        }`}>
+                          {(() => {
+                            const nextMonth = getNextMonth(commodity.latestMonth.year, commodity.latestMonth.month);
+                            return getSuccessRateForMonth(commodity.symbol, nextMonth.month);
+                          })()}%
+                        </span>
+                      </div>
+                    </div>
+                  )}
+                  
+                  {/* Horizontal divider */}
+                  <div className="border-t border-gray-200 my-2"></div>
+                  
                   {/* Top Falls */}
                   <div>
                     <h4 className="text-xs font-medium text-red-600 mb-1">Top 3 Falls</h4>
@@ -1089,6 +1373,60 @@ export default function HistoricalData() {
               </div>
             </div>
           ))}
+        </div>
+      )}
+
+      {/* Seasonal Chart Section */}
+      {activeTab === 'commodities' && (
+        <div className="bg-white shadow rounded-lg mb-6">
+          <div className="px-6 py-4 border-b border-gray-200">
+            <div className="flex justify-between items-center">
+              <h3 className="text-lg font-medium text-gray-900">Seasonal Price Analysis</h3>
+              <div className="flex items-center space-x-4">
+                <select
+                  value={selectedCommodityForSeasonal}
+                  onChange={(e) => {
+                    setSelectedCommodityForSeasonal(e.target.value);
+                    setShowSeasonalChart(e.target.value !== '');
+                  }}
+                  className="block w-48 border border-gray-300 rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-primary-500 focus:border-primary-500"
+                >
+                  <option value="">Select Commodity</option>
+                  {commodityStats?.map((commodity) => (
+                    <option key={commodity.symbol} value={commodity.symbol}>
+                      {commodity.symbol}
+                    </option>
+                  ))}
+                </select>
+                {selectedCommodityForSeasonal && (
+                  <button
+                    onClick={() => {
+                      setSelectedCommodityForSeasonal('');
+                      setShowSeasonalChart(false);
+                    }}
+                    className="text-sm text-gray-500 hover:text-gray-700"
+                  >
+                    Clear
+                  </button>
+                )}
+              </div>
+            </div>
+          </div>
+          
+          {showSeasonalChart && seasonalData && (
+            <div className="p-6">
+              {seasonalLoading ? (
+                <div className="flex justify-center items-center h-64">
+                  <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-primary-600"></div>
+                </div>
+              ) : (
+                <SeasonalChartTable 
+                  data={seasonalData} 
+                  commodity={selectedCommodityForSeasonal}
+                />
+              )}
+            </div>
+          )}
         </div>
       )}
 

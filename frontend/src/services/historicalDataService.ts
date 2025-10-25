@@ -113,6 +113,11 @@ export const getCommodityStats = async (): Promise<Array<{
     closingPrice: number;
   }>;
   timeRange: string;
+  latestMonth: {
+    year: number;
+    month: number;
+    closingPrice: number;
+  } | null;
 }>> => {
   const response = await axios.get(`${API_BASE_URL}/historicalData/commodities/stats`);
   return response.data;
@@ -129,6 +134,28 @@ export const getCommodityChartData = async (): Promise<Array<{
   }>;
 }>> => {
   const response = await axios.get(`${API_BASE_URL}/historicalData/commodities/chart-data`);
+  return response.data;
+};
+
+// Get seasonal data for a specific commodity (last 10 years)
+export const getCommoditySeasonalData = async (symbol: string): Promise<Array<{
+  year: number;
+  month: number;
+  closingPrice: number;
+  percentChange: number | null;
+}>> => {
+  const response = await axios.get(`${API_BASE_URL}/historicalData/commodities/seasonal/${symbol}`);
+  return response.data;
+};
+
+// Get seasonal data for all commodities (last 10 years)
+export const getAllCommoditiesSeasonalData = async (): Promise<Record<string, Array<{
+  year: number;
+  month: number;
+  closingPrice: number;
+  percentChange: number | null;
+}>>> => {
+  const response = await axios.get(`${API_BASE_URL}/historicalData/commodities/seasonal-all`);
   return response.data;
 };
 
