@@ -12,7 +12,7 @@ export const NSE_FO_STOCKS = [
   
   // IT & Technology
   'TCS', 'INFY', 'HCLTECH', 'WIPRO', 'TECHM', 'LTIM', 'PERSISTENT', 'MINDTREE', 'COFORGE',
-  'MPHASIS', 'LTI', 'MINDTREE', 'HEXAWARE', 'ZENSAR', 'NIIT', 'CYIENT', 'KPITTECH',
+  'MPHASIS', 'LTI', 'HEXAWARE', 'ZENSAR', 'NIIT', 'CYIENT', 'KPITTECH',
   
   // Energy & Oil
   'RELIANCE', 'ONGC', 'OIL', 'BPCL', 'HPCL', 'IOC', 'GAIL', 'PETRONET', 'ADANIGREEN',
@@ -83,14 +83,15 @@ export const NSE_FO_STOCKS = [
  * Get all NSE F&O stocks
  */
 export function getNSEFOStocks(): string[] {
-  return NSE_FO_STOCKS;
+  // Remove duplicates and return unique list
+  return [...new Set(NSE_FO_STOCKS)];
 }
 
 /**
  * Get total count of F&O stocks
  */
 export function getNSEFOStocksCount(): number {
-  return NSE_FO_STOCKS.length;
+  return [...new Set(NSE_FO_STOCKS)].length;
 }
 
 /**

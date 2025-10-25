@@ -29,7 +29,6 @@ import {
   updateCommodityData,
   deleteCommodityData,
   getPreviousMonthCommodityData,
-  downloadEquityData,
   getEquitySymbols,
   getHistoricalPriceEquity,
   bulkUploadCommodityData,
@@ -188,7 +187,6 @@ export default function HistoricalData() {
   const [openDialog, setOpenDialog] = useState(false);
   const [editingRecord, setEditingRecord] = useState<HistoricalData | HistoricalPriceCommodity | null>(null);
   const [messages, setMessages] = useState<Message[]>([]);
-  const [showEquityDownload, setShowEquityDownload] = useState(false);
   const [formData, setFormData] = useState<HistoricalDataFormData>({
     symbol: '',
     date: '',
@@ -208,11 +206,6 @@ export default function HistoricalData() {
   const [calculatedPercentChange, setCalculatedPercentChange] = useState<number | null>(null);
   const [previousMonthData, setPreviousMonthData] = useState<HistoricalPriceCommodity | null>(null);
   const [isCalculatingPercent, setIsCalculatingPercent] = useState(false);
-  const [equityDownloadData, setEquityDownloadData] = useState({
-    symbol: '',
-    startDate: '',
-    endDate: '',
-  });
 
   // Bulk download state
   const [bulkDownloadData, setBulkDownloadData] = useState({
@@ -519,21 +512,6 @@ export default function HistoricalData() {
   });
 
 
-  const downloadEquityMutation = useMutation({
-    mutationFn: ({ symbol, startDate, endDate }: { symbol: string; startDate: string; endDate: string }) => 
-      downloadEquityData(symbol, startDate, endDate),
-    onSuccess: (data) => {
-      queryClient.invalidateQueries({ queryKey: ['historicalData'] });
-      queryClient.invalidateQueries({ queryKey: ['historicalDataStats'] });
-      queryClient.invalidateQueries({ queryKey: ['historicalPriceEquity'] });
-      setShowEquityDownload(false);
-      setEquityDownloadData({ symbol: '', startDate: '', endDate: '' });
-      addMessage('success', `Equity data downloaded successfully! Created: ${data.created}, Updated: ${data.updated}, Total: ${data.total}`);
-    },
-    onError: (error: any) => {
-      addMessage('error', `Failed to download equity data: ${error.response?.data?.message || error.message}`);
-    },
-  });
 
   // Bulk download mutation
   const bulkDownloadMutation = useMutation({
@@ -583,8 +561,10 @@ export default function HistoricalData() {
       console.log('Equity stats data:', equityStatsData);
       console.log('Equity stats loading:', equityStatsLoading);
       console.log('Equity stats error:', equityStatsError);
+      console.log('Equity sorted data:', equitySortedData);
+      console.log('Current page:', equityCurrentPage);
     }
-  }, [equityStatsData, equityStatsLoading, equityStatsError, activeTab]);
+  }, [equityStatsData, equityStatsLoading, equityStatsError, activeTab, equitySortedData, equityCurrentPage]);
 
   // Equity table sorting effect
   useEffect(() => {
@@ -593,7 +573,24 @@ export default function HistoricalData() {
       return;
     }
     
-    const sorted = [...equityStatsData].sort((a, b) => {
+    // Debug: Check for duplicates in original data
+    const symbols = equityStatsData.map(item => item.symbol);
+    const uniqueSymbols = [...new Set(symbols)];
+    if (symbols.length !== uniqueSymbols.length) {
+      console.warn('Duplicate symbols found in equityStatsData:', symbols.length, 'vs', uniqueSymbols.length);
+      console.log('Duplicate symbols:', symbols.filter((symbol, index) => symbols.indexOf(symbol) !== index));
+    }
+    
+    // Deduplicate data by symbol (keep the first occurrence)
+    const deduplicatedData = equityStatsData.filter((item, index, self) => 
+      index === self.findIndex(t => t.symbol === item.symbol)
+    );
+    
+    if (deduplicatedData.length !== equityStatsData.length) {
+      console.log('Deduplicated data:', deduplicatedData.length, 'from', equityStatsData.length);
+    }
+    
+    const sorted = [...deduplicatedData].sort((a, b) => {
       let aValue: any;
       let bValue: any;
 
@@ -657,6 +654,14 @@ export default function HistoricalData() {
   const equityStartIndex = (equityCurrentPage - 1) * equityItemsPerPage;
   const equityEndIndex = equityStartIndex + equityItemsPerPage;
   const equityPaginatedData = equitySortedData?.slice(equityStartIndex, equityEndIndex) || [];
+
+  // Debug logging for pagination
+  useEffect(() => {
+    if (activeTab === 'equities') {
+      console.log('Equity paginated data:', equityPaginatedData);
+      console.log('Total pages:', equityTotalPages);
+    }
+  }, [activeTab, equityPaginatedData, equityTotalPages]);
 
   // Effect to update F&O stocks count
   useEffect(() => {
@@ -908,26 +913,6 @@ export default function HistoricalData() {
   };
 
 
-  const handleEquityDownload = () => {
-    if (!equityDownloadData.symbol) {
-      addMessage('error', 'Please select a symbol');
-      return;
-    }
-    if (!equityDownloadData.startDate || !equityDownloadData.endDate) {
-      addMessage('error', 'Please select start and end dates');
-      return;
-    }
-    if (new Date(equityDownloadData.startDate) >= new Date(equityDownloadData.endDate)) {
-      addMessage('error', 'Start date must be before end date');
-      return;
-    }
-
-    downloadEquityMutation.mutate({
-      symbol: equityDownloadData.symbol,
-      startDate: equityDownloadData.startDate,
-      endDate: equityDownloadData.endDate,
-    });
-  };
 
   const handleBulkDownload = () => {
     if (!bulkDownloadData.startDate || !bulkDownloadData.endDate) {
@@ -1165,26 +1150,15 @@ export default function HistoricalData() {
         <h1 className="text-2xl font-bold text-gray-900">Historical Data Management</h1>
         <div className="flex space-x-3">
           {activeTab === 'equities' && (
-            <>
-              <button
-                onClick={() => setShowEquityDownload(!showEquityDownload)}
-                className="inline-flex items-center px-4 py-2 border border-gray-300 text-sm font-medium rounded-md shadow-sm text-gray-700 bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-primary-500"
-              >
-                <svg className="h-4 w-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
-                </svg>
-                Download Equity Data
-              </button>
-              <button
-                onClick={() => setShowBulkDownload(!showBulkDownload)}
-                className="inline-flex items-center px-4 py-2 border border-gray-300 text-sm font-medium rounded-md shadow-sm text-gray-700 bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-green-500"
-              >
-                <svg className="h-4 w-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
-                </svg>
-                Bulk Download F&O Stocks
-              </button>
-            </>
+            <button
+              onClick={() => setShowBulkDownload(!showBulkDownload)}
+              className="inline-flex items-center px-4 py-2 border border-gray-300 text-sm font-medium rounded-md shadow-sm text-gray-700 bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-green-500"
+            >
+              <svg className="h-4 w-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
+              </svg>
+              Bulk Download F&O Stocks
+            </button>
           )}
           {activeTab === 'commodities' && (
             <button
@@ -1235,63 +1209,6 @@ export default function HistoricalData() {
         </div>
       </div>
 
-      {/* Equity Download Form */}
-      {activeTab === 'equities' && showEquityDownload && (
-        <div className="mb-6 bg-white shadow rounded-lg p-6">
-          <h3 className="text-lg font-medium text-gray-900 mb-4">Download Equity Historical Data</h3>
-          <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">Symbol *</label>
-              <select
-                value={equityDownloadData.symbol}
-                onChange={(e) => setEquityDownloadData(prev => ({ ...prev, symbol: e.target.value }))}
-                className="block w-full border border-gray-300 rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-primary-500 focus:border-primary-500"
-              >
-                <option value="">Select Symbol</option>
-                {equitySymbols?.map((symbol) => (
-                  <option key={symbol} value={symbol}>
-                    {symbol}
-                  </option>
-                ))}
-              </select>
-            </div>
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">Start Date *</label>
-              <input
-                type="date"
-                value={equityDownloadData.startDate}
-                onChange={(e) => setEquityDownloadData(prev => ({ ...prev, startDate: e.target.value }))}
-                className="block w-full border border-gray-300 rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-primary-500 focus:border-primary-500"
-              />
-            </div>
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">End Date *</label>
-              <input
-                type="date"
-                value={equityDownloadData.endDate}
-                onChange={(e) => setEquityDownloadData(prev => ({ ...prev, endDate: e.target.value }))}
-                className="block w-full border border-gray-300 rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-primary-500 focus:border-primary-500"
-              />
-            </div>
-            <div className="flex items-end">
-              <button
-                onClick={handleEquityDownload}
-                disabled={downloadEquityMutation.isPending}
-                className="w-full inline-flex justify-center items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md shadow-sm text-white bg-primary-600 hover:bg-primary-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-primary-500 disabled:opacity-50 disabled:cursor-not-allowed"
-              >
-                {downloadEquityMutation.isPending ? (
-                  <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white mr-2"></div>
-                ) : (
-                  <svg className="h-4 w-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
-                  </svg>
-                )}
-                {downloadEquityMutation.isPending ? 'Downloading...' : 'Download Data'}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
 
       {/* Bulk Download Form */}
       {activeTab === 'equities' && showBulkDownload && (
@@ -2151,640 +2068,7 @@ export default function HistoricalData() {
         </div>
       )}
 
-      <div className="bg-white shadow rounded-lg">
-        <div className="px-6 py-4 border-b border-gray-200">
-          <h2 className="text-lg font-medium text-gray-900">
-            {activeTab === 'commodities' ? 'Commodities' : 'Equities'} Historical Data Records ({
-              activeTab === 'commodities' ? (commoditiesData?.length || 0) :
-              activeTab === 'equities' && equityData ? (equityData?.length || 0) :
-              (records?.length || 0)
-            })
-          </h2>
-          <p className="text-sm text-gray-600 mt-1">
-            Manage historical price data for {activeTab === 'commodities' ? 'commodity' : 'equity'} symbols
-          </p>
-        </div>
 
-        {/* Pagination Controls for Commodities - Top */}
-        {activeTab === 'commodities' && paginationInfo && paginationInfo.totalPages > 1 && (
-          <div className="bg-white px-4 py-3 flex items-center justify-between border-b border-gray-200 sm:px-6">
-            <div className="flex-1 flex justify-between sm:hidden">
-              <button
-                onClick={() => setCurrentPage(prev => Math.max(1, prev - 1))}
-                disabled={!paginationInfo.hasPreviousPage}
-                className="relative inline-flex items-center px-4 py-2 border border-gray-300 text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
-              >
-                Previous
-              </button>
-              <button
-                onClick={() => setCurrentPage(prev => Math.min(paginationInfo.totalPages, prev + 1))}
-                disabled={!paginationInfo.hasNextPage}
-                className="ml-3 relative inline-flex items-center px-4 py-2 border border-gray-300 text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
-              >
-                Next
-              </button>
-            </div>
-            <div className="hidden sm:flex-1 sm:flex sm:items-center sm:justify-between">
-              <div>
-                <p className="text-sm text-gray-700">
-                  Showing{' '}
-                  <span className="font-medium">{(currentPage - 1) * itemsPerPage + 1}</span>
-                  {' '}to{' '}
-                  <span className="font-medium">
-                    {Math.min(currentPage * itemsPerPage, paginationInfo.totalCount)}
-                  </span>
-                  {' '}of{' '}
-                  <span className="font-medium">{paginationInfo.totalCount}</span>
-                  {' '}results
-                </p>
-              </div>
-              <div>
-                <nav className="relative z-0 inline-flex rounded-md shadow-sm -space-x-px" aria-label="Pagination">
-                  <button
-                    onClick={() => setCurrentPage(prev => Math.max(1, prev - 1))}
-                    disabled={!paginationInfo.hasPreviousPage}
-                    className="relative inline-flex items-center px-2 py-2 rounded-l-md border border-gray-300 bg-white text-sm font-medium text-gray-500 hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
-                  >
-                    <span className="sr-only">Previous</span>
-                    <svg className="h-5 w-5" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
-                      <path fillRule="evenodd" d="M12.707 5.293a1 1 0 010 1.414L9.414 10l3.293 3.293a1 1 0 01-1.414 1.414l-4-4a1 1 0 010-1.414l4-4a1 1 0 011.414 0z" clipRule="evenodd" />
-                    </svg>
-                  </button>
-                  
-                  {/* Page numbers */}
-                  {Array.from({ length: Math.min(5, paginationInfo.totalPages) }, (_, i) => {
-                    const startPage = Math.max(1, currentPage - 2);
-                    const pageNum = startPage + i;
-                    if (pageNum > paginationInfo.totalPages) return null;
-                    
-                    return (
-                      <button
-                        key={pageNum}
-                        onClick={() => setCurrentPage(pageNum)}
-                        className={`relative inline-flex items-center px-4 py-2 border text-sm font-medium ${
-                          pageNum === currentPage
-                            ? 'z-10 bg-primary-50 border-primary-500 text-primary-600'
-                            : 'bg-white border-gray-300 text-gray-500 hover:bg-gray-50'
-                        }`}
-                      >
-                        {pageNum}
-                      </button>
-                    );
-                  })}
-                  
-                  <button
-                    onClick={() => setCurrentPage(prev => Math.min(paginationInfo.totalPages, prev + 1))}
-                    disabled={!paginationInfo.hasNextPage}
-                    className="relative inline-flex items-center px-2 py-2 rounded-r-md border border-gray-300 bg-white text-sm font-medium text-gray-500 hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
-                  >
-                    <span className="sr-only">Next</span>
-                    <svg className="h-5 w-5" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
-                      <path fillRule="evenodd" d="M7.293 14.707a1 1 0 010-1.414L10.586 10 7.293 6.707a1 1 0 011.414-1.414l4 4a1 1 0 010 1.414l-4 4a1 1 0 01-1.414 0z" clipRule="evenodd" />
-                    </svg>
-                  </button>
-                </nav>
-              </div>
-            </div>
-          </div>
-        )}
-
-        <div className="overflow-x-auto">
-          <table className="min-w-full divide-y divide-gray-200">
-            <thead className="bg-gray-50">
-              <tr>
-                {activeTab === 'commodities' ? (
-                  // Commodities table headers
-                  <>
-                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                      Symbol
-                    </th>
-                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                      Year
-                    </th>
-                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                      Month
-                    </th>
-                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                      Closing Price
-                    </th>
-                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                      Monthly % Change
-                    </th>
-                  </>
-                ) : activeTab === 'equities' && equityData ? (
-                  // Equity monthly data headers
-                  <>
-                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                      Symbol
-                    </th>
-                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                      Year
-                    </th>
-                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                      Month
-                    </th>
-                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                      Closing Price
-                    </th>
-                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                      Monthly % Change
-                    </th>
-                  </>
-                ) : (
-                  // Daily equity data headers
-                  <>
-                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                      Symbol
-                    </th>
-                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                      Date
-                    </th>
-                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                      Open
-                    </th>
-                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                      High
-                    </th>
-                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                      Low
-                    </th>
-                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                      Close
-                    </th>
-                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                      Volume
-                    </th>
-                    <th className="px-6 py-3 text-center text-xs font-medium text-gray-500 uppercase tracking-wider">
-                      Actions
-                    </th>
-                  </>
-                )}
-              </tr>
-            </thead>
-            <tbody className="bg-white divide-y divide-gray-200">
-              {activeTab === 'commodities' && commoditiesData ? (
-                commoditiesData.map((record: any) => (
-                  <tr key={record.id} className="hover:bg-gray-50">
-                    <td className="px-6 py-4 whitespace-nowrap">
-                      <div className="text-sm font-medium text-gray-900">{record.symbol}</div>
-                    </td>
-                    <td className="px-6 py-4 whitespace-nowrap">
-                      <div className="text-sm text-gray-900">{record.year}</div>
-                    </td>
-                    <td className="px-6 py-4 whitespace-nowrap">
-                      <div className="text-sm text-gray-900">
-                        {new Date(record.year, record.month - 1).toLocaleDateString('en-US', { month: 'long' })}
-                      </div>
-                    </td>
-                    <td className="px-6 py-4 whitespace-nowrap">
-                      <div className="text-sm font-medium text-gray-900">₹{formatPrice(record.closingPrice)}</div>
-                    </td>
-                    <td className="px-6 py-4 whitespace-nowrap">
-                      <div className={`text-sm font-medium ${
-                        record.percentChange > 0 ? 'text-green-600' : 
-                        record.percentChange < 0 ? 'text-red-600' : 'text-gray-900'
-                      }`}>
-                        {record.percentChange !== null ? `${record.percentChange > 0 ? '+' : ''}${record.percentChange.toFixed(2)}%` : '-'}
-                      </div>
-                    </td>
-                  </tr>
-                ))
-              ) : activeTab === 'equities' && equityData ? (
-                equityData.map((record: any) => (
-                  <tr key={record.id} className="hover:bg-gray-50">
-                    <td className="px-6 py-4 whitespace-nowrap">
-                      <div className="text-sm font-medium text-gray-900">{record.symbol}</div>
-                    </td>
-                    <td className="px-6 py-4 whitespace-nowrap">
-                      <div className="text-sm text-gray-900">{record.year}</div>
-                    </td>
-                    <td className="px-6 py-4 whitespace-nowrap">
-                      <div className="text-sm text-gray-900">
-                        {new Date(record.year, record.month - 1).toLocaleDateString('en-US', { month: 'long' })}
-                      </div>
-                    </td>
-                    <td className="px-6 py-4 whitespace-nowrap">
-                      <div className="text-sm font-medium text-gray-900">₹{formatPrice(record.closingPrice)}</div>
-                    </td>
-                    <td className="px-6 py-4 whitespace-nowrap">
-                      <div className={`text-sm font-medium ${
-                        record.percentChange > 0 ? 'text-green-600' : 
-                        record.percentChange < 0 ? 'text-red-600' : 'text-gray-900'
-                      }`}>
-                        {record.percentChange !== null ? `${record.percentChange > 0 ? '+' : ''}${record.percentChange.toFixed(2)}%` : '-'}
-                      </div>
-                    </td>
-                  </tr>
-                ))
-              ) : (
-                records?.map((record) => (
-                  <tr key={record.id} className="hover:bg-gray-50">
-                    <td className="px-6 py-4 whitespace-nowrap">
-                      <div className="text-sm font-medium text-gray-900">{record.symbol}</div>
-                    </td>
-                    <td className="px-6 py-4 whitespace-nowrap">
-                      <div className="text-sm text-gray-900">{formatDate(record.date)}</div>
-                    </td>
-                    <td className="px-6 py-4 whitespace-nowrap">
-                      <div className="text-sm text-gray-900">{formatPrice(record.open)}</div>
-                    </td>
-                    <td className="px-6 py-4 whitespace-nowrap">
-                      <div className="text-sm text-gray-900">{formatPrice(record.high)}</div>
-                    </td>
-                    <td className="px-6 py-4 whitespace-nowrap">
-                      <div className="text-sm text-gray-900">{formatPrice(record.low)}</div>
-                    </td>
-                    <td className="px-6 py-4 whitespace-nowrap">
-                      <div className="text-sm text-gray-900">{formatPrice(record.close)}</div>
-                    </td>
-                    <td className="px-6 py-4 whitespace-nowrap">
-                      <div className="text-sm text-gray-900">
-                        {record.volume ? record.volume.toLocaleString() : '-'}
-                      </div>
-                    </td>
-                    <td className="px-6 py-4 whitespace-nowrap text-center text-sm font-medium">
-                      <div className="flex justify-center space-x-2">
-                        <button
-                          onClick={() => handleOpenDialog(record)}
-                          className="text-primary-600 hover:text-primary-900"
-                          title="Edit Record"
-                        >
-                          <PencilIcon className="h-4 w-4" />
-                        </button>
-                        <button
-                          onClick={() => handleDelete(record.id)}
-                          className="text-red-600 hover:text-red-900"
-                          title="Delete Record"
-                        >
-                          <TrashIcon className="h-4 w-4" />
-                        </button>
-                      </div>
-                    </td>
-                  </tr>
-                ))
-              )}
-            </tbody>
-          </table>
-        </div>
-
-        {((activeTab === 'commodities' && (!commoditiesData || commoditiesData.length === 0)) || 
-          (activeTab === 'equities' && (!equityData || equityData.length === 0) && (!records || records.length === 0))) && (
-          <div className="text-center py-12">
-            <div className="text-gray-500 text-lg">
-              {activeTab === 'commodities' 
-                ? 'No commodity historical data found' 
-                : activeTab === 'equities' && (!equityData || equityData.length === 0)
-                ? 'No equity historical data found'
-                : `No ${activeTab} historical data records found`
-              }
-            </div>
-            <div className="text-gray-400 text-sm mt-2">
-              {activeTab === 'commodities' 
-                ? 'Click "Add Record" to create your first commodity record' 
-                : activeTab === 'equities'
-                ? 'Click "Download Equity Data" to fetch historical data for a specific symbol'
-                : `Click "Add Record" to create your first ${activeTab === 'commodities' ? 'commodity' : 'equity'} record`
-              }
-            </div>
-          </div>
-        )}
-      </div>
-
-      {/* Add/Edit Record Dialog */}
-      <Transition.Root show={openDialog} as={Fragment}>
-        <Dialog as="div" className="relative z-50" onClose={handleCloseDialog}>
-          <Transition.Child
-            as={Fragment}
-            enter="ease-out duration-300"
-            enterFrom="opacity-0"
-            enterTo="opacity-100"
-            leave="ease-in duration-200"
-            leaveFrom="opacity-100"
-            leaveTo="opacity-0"
-          >
-            <div className="fixed inset-0 bg-gray-500 bg-opacity-75 transition-opacity" />
-          </Transition.Child>
-
-          <div className="fixed inset-0 z-10 overflow-y-auto">
-            <div className="flex min-h-full items-end justify-center p-4 text-center sm:items-center sm:p-0">
-              <Transition.Child
-                as={Fragment}
-                enter="ease-out duration-300"
-                enterFrom="opacity-0 translate-y-4 sm:translate-y-0 sm:scale-95"
-                enterTo="opacity-100 translate-y-0 sm:scale-100"
-                leave="ease-in duration-200"
-                leaveFrom="opacity-100 translate-y-0 sm:scale-100"
-                leaveTo="opacity-0 translate-y-4 sm:translate-y-0 sm:scale-95"
-              >
-                <Dialog.Panel className="relative transform overflow-hidden rounded-lg bg-white px-4 pb-4 pt-5 text-left shadow-xl transition-all sm:my-8 sm:w-full sm:max-w-lg sm:p-6">
-                  <div>
-                    <Dialog.Title as="h3" className="text-lg font-medium leading-6 text-gray-900 mb-4">
-                      {editingRecord ? `Edit ${activeTab === 'commodities' ? 'Commodity' : 'Equity'} Historical Data Record` : `Add New ${activeTab === 'commodities' ? 'Commodity' : 'Equity'} Historical Data Record`}
-                    </Dialog.Title>
-                    <div className="space-y-4">
-                      {activeTab === 'commodities' ? (
-                        // Commodities form
-                        <>
-                          <div>
-                            <label className="block text-sm font-medium text-gray-700">
-                              Symbol *
-                            </label>
-                            <input
-                              type="text"
-                              value={commodityFormData.symbol}
-                              onChange={(e) => setCommodityFormData({ ...commodityFormData, symbol: e.target.value })}
-                              className="mt-1 block w-full border border-gray-300 rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-primary-500 focus:border-primary-500"
-                              placeholder="e.g., GOLD, SILVER, CRUDE"
-                              required
-                            />
-                          </div>
-                          <div className="grid grid-cols-2 gap-4">
-                            <div>
-                              <label className="block text-sm font-medium text-gray-700">
-                                Year *
-                              </label>
-                              <input
-                                type="number"
-                                min="1900"
-                                max="2100"
-                                value={commodityFormData.year}
-                                onChange={(e) => setCommodityFormData({ ...commodityFormData, year: e.target.value })}
-                                className="mt-1 block w-full border border-gray-300 rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-primary-500 focus:border-primary-500"
-                                placeholder="2024"
-                                required
-                              />
-                            </div>
-                            <div>
-                              <label className="block text-sm font-medium text-gray-700">
-                                Month *
-                              </label>
-                              <select
-                                value={commodityFormData.month}
-                                onChange={(e) => setCommodityFormData({ ...commodityFormData, month: e.target.value })}
-                                className="mt-1 block w-full border border-gray-300 rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-primary-500 focus:border-primary-500"
-                                required
-                              >
-                                <option value="">Select Month</option>
-                                <option value="1">January</option>
-                                <option value="2">February</option>
-                                <option value="3">March</option>
-                                <option value="4">April</option>
-                                <option value="5">May</option>
-                                <option value="6">June</option>
-                                <option value="7">July</option>
-                                <option value="8">August</option>
-                                <option value="9">September</option>
-                                <option value="10">October</option>
-                                <option value="11">November</option>
-                                <option value="12">December</option>
-                              </select>
-                            </div>
-                          </div>
-                          <div>
-                            <label className="block text-sm font-medium text-gray-700">
-                              Closing Price *
-                            </label>
-                            <input
-                              type="number"
-                              step="0.01"
-                              min="0"
-                              value={commodityFormData.closingPrice}
-                              onChange={(e) => setCommodityFormData({ ...commodityFormData, closingPrice: e.target.value })}
-                              className="mt-1 block w-full border border-gray-300 rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-primary-500 focus:border-primary-500"
-                              placeholder="0.00"
-                              required
-                            />
-                          </div>
-                          <div>
-                            <label className="block text-sm font-medium text-gray-700">
-                              Percent Change
-                            </label>
-                            <div className="mt-1 space-y-2">
-                              <input
-                                type="number"
-                                step="0.01"
-                                value={commodityFormData.percentChange}
-                                onChange={(e) => setCommodityFormData({ ...commodityFormData, percentChange: e.target.value })}
-                                className="block w-full border border-gray-300 rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-primary-500 focus:border-primary-500"
-                                placeholder="Optional"
-                              />
-                              
-                              {/* Show calculation status and previous month data */}
-                              {isCalculatingPercent && (
-                                <div className="flex items-center text-sm text-blue-600">
-                                  <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-blue-600 mr-2"></div>
-                                  Calculating percentage change...
-                                </div>
-                              )}
-                              
-                              {!isCalculatingPercent && calculatedPercentChange !== null && previousMonthData && (
-                                <div className="bg-green-50 border border-green-200 rounded-md p-3">
-                                  <div className="text-sm text-green-800">
-                                    <div className="font-medium">Calculated from previous month:</div>
-                                    <div className="mt-1">
-                                      <span className="font-medium">{previousMonthData.symbol}</span> - {previousMonthData.year}/{String(previousMonthData.month).padStart(2, '0')}: ₹{previousMonthData.closingPrice.toFixed(2)}
-                                    </div>
-                                    <div className="mt-1">
-                                      <span className="font-medium">Calculated Change:</span> 
-                                      <span className={`ml-1 ${calculatedPercentChange >= 0 ? 'text-green-600' : 'text-red-600'}`}>
-                                        {calculatedPercentChange >= 0 ? '+' : ''}{calculatedPercentChange.toFixed(2)}%
-                                      </span>
-                                    </div>
-                                  </div>
-                                </div>
-                              )}
-                              
-                              {!isCalculatingPercent && calculatedPercentChange === null && commodityFormData.symbol && commodityFormData.year && commodityFormData.month && commodityFormData.closingPrice && (
-                                <div className="bg-yellow-50 border border-yellow-200 rounded-md p-3">
-                                  <div className="text-sm text-yellow-800">
-                                    <div className="font-medium">No previous month data found</div>
-                                    <div className="mt-1">Percentage change will be set to null for this record.</div>
-                                  </div>
-                                </div>
-                              )}
-                            </div>
-                          </div>
-                        </>
-                      ) : (
-                        // Equities form (original structure)
-                        <>
-                          <div>
-                            <label className="block text-sm font-medium text-gray-700">
-                              Symbol *
-                            </label>
-                            <input
-                              type="text"
-                              value={formData.symbol}
-                              onChange={(e) => setFormData({ ...formData, symbol: e.target.value })}
-                              className="mt-1 block w-full border border-gray-300 rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-primary-500 focus:border-primary-500"
-                              placeholder="e.g., RELIANCE, TCS, INFY"
-                              required
-                            />
-                          </div>
-                          <div>
-                            <label className="block text-sm font-medium text-gray-700">
-                              Date *
-                            </label>
-                            <input
-                              type="date"
-                              value={formData.date}
-                              onChange={(e) => setFormData({ ...formData, date: e.target.value })}
-                              className="mt-1 block w-full border border-gray-300 rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-primary-500 focus:border-primary-500"
-                              required
-                            />
-                          </div>
-                          <div className="grid grid-cols-2 gap-4">
-                            <div>
-                              <label className="block text-sm font-medium text-gray-700">
-                                Open Price *
-                              </label>
-                              <input
-                                type="number"
-                                step="0.01"
-                                min="0"
-                                value={formData.open}
-                                onChange={(e) => setFormData({ ...formData, open: e.target.value })}
-                                className="mt-1 block w-full border border-gray-300 rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-primary-500 focus:border-primary-500"
-                                placeholder="0.00"
-                                required
-                              />
-                            </div>
-                            <div>
-                              <label className="block text-sm font-medium text-gray-700">
-                                High Price *
-                              </label>
-                              <input
-                                type="number"
-                                step="0.01"
-                                min="0"
-                                value={formData.high}
-                                onChange={(e) => setFormData({ ...formData, high: e.target.value })}
-                                className="mt-1 block w-full border border-gray-300 rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-primary-500 focus:border-primary-500"
-                                placeholder="0.00"
-                                required
-                              />
-                            </div>
-                            <div>
-                              <label className="block text-sm font-medium text-gray-700">
-                                Low Price *
-                              </label>
-                              <input
-                                type="number"
-                                step="0.01"
-                                min="0"
-                                value={formData.low}
-                                onChange={(e) => setFormData({ ...formData, low: e.target.value })}
-                                className="mt-1 block w-full border border-gray-300 rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-primary-500 focus:border-primary-500"
-                                placeholder="0.00"
-                                required
-                              />
-                            </div>
-                            <div>
-                              <label className="block text-sm font-medium text-gray-700">
-                                Close Price *
-                              </label>
-                              <input
-                                type="number"
-                                step="0.01"
-                                min="0"
-                                value={formData.close}
-                                onChange={(e) => setFormData({ ...formData, close: e.target.value })}
-                                className="mt-1 block w-full border border-gray-300 rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-primary-500 focus:border-primary-500"
-                                placeholder="0.00"
-                                required
-                              />
-                            </div>
-                          </div>
-                          <div>
-                            <label className="block text-sm font-medium text-gray-700">
-                              Volume
-                            </label>
-                            <input
-                              type="number"
-                              min="0"
-                              value={formData.volume}
-                              onChange={(e) => setFormData({ ...formData, volume: e.target.value })}
-                              className="mt-1 block w-full border border-gray-300 rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-primary-500 focus:border-primary-500"
-                              placeholder="Optional"
-                            />
-                          </div>
-                        </>
-                      )}
-                    </div>
-                  </div>
-                  <div className="mt-6 flex justify-end space-x-3">
-                    <button
-                      type="button"
-                      onClick={handleCloseDialog}
-                      className="px-4 py-2 border border-gray-300 rounded-md text-sm font-medium text-gray-700 bg-white hover:bg-gray-50"
-                    >
-                      Cancel
-                    </button>
-                    <button
-                      type="button"
-                      onClick={handleSubmit}
-                      disabled={addRecordMutation.isPending || updateRecordMutation.isPending || addCommodityMutation.isPending || updateCommodityMutation.isPending}
-                      className="px-4 py-2 border border-transparent rounded-md text-sm font-medium text-white bg-primary-600 hover:bg-primary-700 disabled:opacity-50"
-                    >
-                      {editingRecord ? 'Update' : 'Add'} Record
-                    </button>
-                  </div>
-                </Dialog.Panel>
-              </Transition.Child>
-            </div>
-          </div>
-        </Dialog>
-      </Transition.Root>
-
-      {/* Messages Display */}
-      {messages.length > 0 && (
-        <div className="fixed bottom-4 right-4 z-50 space-y-2 max-w-md">
-          {messages.map((message) => (
-            <div
-              key={message.id}
-              className={`flex items-center p-4 rounded-lg shadow-lg border-l-4 ${
-                message.type === 'success'
-                  ? 'bg-green-50 border-green-400 text-green-800'
-                  : message.type === 'error'
-                  ? 'bg-red-50 border-red-400 text-red-800'
-                  : 'bg-blue-50 border-blue-400 text-blue-800'
-              }`}
-            >
-              <div className="flex-shrink-0">
-                {message.type === 'success' && (
-                  <CheckCircleIcon className="h-5 w-5 text-green-400" />
-                )}
-                {message.type === 'error' && (
-                  <ExclamationTriangleIcon className="h-5 w-5 text-red-400" />
-                )}
-                {message.type === 'info' && (
-                  <InformationCircleIcon className="h-5 w-5 text-blue-400" />
-                )}
-              </div>
-              <div className="ml-3 flex-1">
-                <p className="text-sm font-medium">{message.message}</p>
-                <p className="text-xs opacity-75">
-                  {message.timestamp.toLocaleTimeString()}
-                </p>
-              </div>
-              <div className="ml-4 flex-shrink-0">
-                <button
-                  onClick={() => removeMessage(message.id)}
-                  className={`inline-flex rounded-md p-1.5 focus:outline-none focus:ring-2 focus:ring-offset-2 ${
-                    message.type === 'success'
-                      ? 'text-green-400 hover:bg-green-100 focus:ring-green-500'
-                      : message.type === 'error'
-                      ? 'text-red-400 hover:bg-red-100 focus:ring-red-500'
-                      : 'text-blue-400 hover:bg-blue-100 focus:ring-blue-500'
-                  }`}
-                >
-                  <XMarkIcon className="h-4 w-4" />
-                </button>
-              </div>
-            </div>
-          ))}
-        </div>
-      )}
     </Layout>
   );
 }
