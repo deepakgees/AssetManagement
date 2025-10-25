@@ -48,7 +48,7 @@ import {
   type UpdateHistoricalDataData,
   type UpdateCommodityData,
 } from '../services/historicalDataService';
-import { getSafetyMargins, type SafetyMargin } from '../services/safetyMarginsService';
+import { getSymbolMargins, updateSafetyMargin, type SymbolMargin } from '../services/symbolMarginsService';
 
 interface Message {
   id: string;
@@ -258,6 +258,13 @@ export default function HistoricalData() {
   const [selectedCommodityForSeasonal, setSelectedCommodityForSeasonal] = useState<string>('');
   const [showSeasonalChart, setShowSeasonalChart] = useState(false);
 
+  // Safety margin edit state
+  const [editingSafetyMargin, setEditingSafetyMargin] = useState<{
+    symbol: string;
+    currentValue: number | null;
+    newValue: string;
+  } | null>(null);
+
   const queryClient = useQueryClient();
 
   // Effect to calculate percentage change when relevant fields change
@@ -383,10 +390,10 @@ export default function HistoricalData() {
     enabled: activeTab === 'commodities',
   });
 
-  // Fetch safety margins data
-  const { data: safetyMargins } = useQuery({
-    queryKey: ['safetyMargins'],
-    queryFn: getSafetyMargins,
+  // Fetch symbol margins data (including safety margins)
+  const { data: symbolMargins } = useQuery({
+    queryKey: ['symbolMargins'],
+    queryFn: () => getSymbolMargins({ hasSafetyMargin: true }),
     enabled: activeTab === 'commodities',
   });
 
@@ -511,7 +518,21 @@ export default function HistoricalData() {
     },
   });
 
-
+  // Safety margin update mutation
+  const updateSafetyMarginMutation = useMutation({
+    mutationFn: ({ id, safetyMargin }: { id: number; safetyMargin: number | null }) => {
+      return updateSafetyMargin(id, safetyMargin);
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['symbolMargins'] });
+      queryClient.invalidateQueries({ queryKey: ['historicalData'] });
+      setEditingSafetyMargin(null);
+      addMessage('success', 'Safety margin updated successfully!');
+    },
+    onError: (error: any) => {
+      addMessage('error', `Failed to update safety margin: ${error.response?.data?.message || error.message}`);
+    },
+  });
 
   // Bulk download mutation
   const bulkDownloadMutation = useMutation({
@@ -617,14 +638,14 @@ export default function HistoricalData() {
           bValue = parseFloat(bValue.toString().replace('%', ''));
           break;
         case 'safePE':
-          const aSafetyMargin = safetyMargins?.find(
-            (sm: SafetyMargin) => sm.symbol.toLowerCase() === a.symbol.toLowerCase() && sm.type === 'equity'
+          const aSafetyMargin = symbolMargins?.find(
+            (sm: SymbolMargin) => sm.symbol.toLowerCase() === a.symbol.toLowerCase() && sm.symbolType === 'equity'
           );
-          const bSafetyMargin = safetyMargins?.find(
-            (sm: SafetyMargin) => sm.symbol.toLowerCase() === b.symbol.toLowerCase() && sm.type === 'equity'
+          const bSafetyMargin = symbolMargins?.find(
+            (sm: SymbolMargin) => sm.symbol.toLowerCase() === b.symbol.toLowerCase() && sm.symbolType === 'equity'
           );
-          aValue = aSafetyMargin && a.latestMonth ? calculateSafePE(a.latestMonth.closingPrice, aSafetyMargin.safetyMargin) : 0;
-          bValue = bSafetyMargin && b.latestMonth ? calculateSafePE(b.latestMonth.closingPrice, bSafetyMargin.safetyMargin) : 0;
+          aValue = aSafetyMargin && a.latestMonth && aSafetyMargin.safetyMargin ? calculateSafePE(a.latestMonth.closingPrice, aSafetyMargin.safetyMargin) : 0;
+          bValue = bSafetyMargin && b.latestMonth && bSafetyMargin.safetyMargin ? calculateSafePE(b.latestMonth.closingPrice, bSafetyMargin.safetyMargin) : 0;
           break;
         case 'successRate':
           const aNextMonth = a.latestMonth ? getNextMonth(a.latestMonth.year, a.latestMonth.month) : null;
@@ -647,7 +668,7 @@ export default function HistoricalData() {
     });
     
     setEquitySortedData(sorted);
-  }, [equityStatsData, equitySortField, equitySortDirection, safetyMargins]);
+  }, [equityStatsData, equitySortField, equitySortDirection, symbolMargins]);
 
   // Then apply pagination to the sorted data
   const equityTotalPages = Math.ceil((equitySortedData?.length || 0) / equityItemsPerPage);
@@ -1069,6 +1090,45 @@ export default function HistoricalData() {
     }
   };
 
+  // Safety margin edit handlers
+  const handleEditSafetyMargin = (symbol: string, currentValue: number | null) => {
+    setEditingSafetyMargin({
+      symbol,
+      currentValue,
+      newValue: currentValue ? currentValue.toString() : ''
+    });
+  };
+
+  const handleCancelEditSafetyMargin = () => {
+    setEditingSafetyMargin(null);
+  };
+
+  const handleSaveSafetyMargin = () => {
+    if (!editingSafetyMargin) return;
+
+    const symbolMargin = symbolMargins?.find(
+      (sm: SymbolMargin) => sm.symbol.toLowerCase() === editingSafetyMargin.symbol.toLowerCase() && sm.symbolType === 'equity'
+    );
+
+    if (!symbolMargin) {
+      addMessage('error', 'Symbol margin record not found');
+      return;
+    }
+
+    const newValue = editingSafetyMargin.newValue.trim();
+    const safetyMarginValue = newValue === '' ? null : parseFloat(newValue);
+
+    if (newValue !== '' && (isNaN(safetyMarginValue!) || safetyMarginValue! < 0)) {
+      addMessage('error', 'Please enter a valid positive safety margin value');
+      return;
+    }
+
+    updateSafetyMarginMutation.mutate({
+      id: symbolMargin.id,
+      safetyMargin: safetyMarginValue
+    });
+  };
+
   const formatDate = (dateString: string) => {
     return new Date(dateString).toLocaleDateString();
   };
@@ -1079,13 +1139,13 @@ export default function HistoricalData() {
 
   // Helper function to get safety margin for a commodity symbol
   const getSafetyMarginForSymbol = (symbol: string): string => {
-    if (!safetyMargins) return 'NA';
+    if (!symbolMargins) return 'NA';
     
-    const safetyMargin = safetyMargins.find(
-      (sm: SafetyMargin) => sm.symbol.toLowerCase() === symbol.toLowerCase() && sm.type === 'commodity'
+    const symbolMargin = symbolMargins.find(
+      (sm: SymbolMargin) => sm.symbol.toLowerCase() === symbol.toLowerCase() && sm.symbolType === 'commodity'
     );
     
-    return safetyMargin ? `${safetyMargin.safetyMargin.toFixed(1)}%` : 'NA';
+    return symbolMargin?.safetyMargin ? `${symbolMargin.safetyMargin.toFixed(1)}%` : 'NA';
   };
 
   // Helper function to format month and year
@@ -1627,29 +1687,43 @@ export default function HistoricalData() {
                         </div>
                       </td>
                       <td className="px-6 py-4 whitespace-nowrap">
-                        <span className={`text-sm font-medium ${
-                          getSafetyMarginForSymbol(stock.symbol) === 'NA' 
-                            ? 'text-gray-500' 
-                            : 'text-blue-700'
-                        }`}>
-                          {getSafetyMarginForSymbol(stock.symbol)}
-                        </span>
+                        <div className="flex items-center space-x-2">
+                          <span className={`text-sm font-medium ${
+                            getSafetyMarginForSymbol(stock.symbol) === 'NA' 
+                              ? 'text-gray-500' 
+                              : 'text-blue-700'
+                          }`}>
+                            {getSafetyMarginForSymbol(stock.symbol)}
+                          </span>
+                          <button
+                            onClick={() => {
+                              const currentValue = symbolMargins?.find(
+                                (sm: SymbolMargin) => sm.symbol.toLowerCase() === stock.symbol.toLowerCase() && sm.symbolType === 'equity'
+                              )?.safetyMargin || null;
+                              handleEditSafetyMargin(stock.symbol, currentValue);
+                            }}
+                            className="text-gray-400 hover:text-blue-600 transition-colors"
+                            title="Edit Safety Margin"
+                          >
+                            <PencilIcon className="h-4 w-4" />
+                          </button>
+                        </div>
                       </td>
                       <td className="px-6 py-4 whitespace-nowrap">
                         {stock.latestMonth ? (
                           <span className={`text-sm font-medium ${
                             (() => {
-                              const safetyMargin = safetyMargins?.find(
-                                (sm: SafetyMargin) => sm.symbol.toLowerCase() === stock.symbol.toLowerCase() && sm.type === 'equity'
+                              const safetyMargin = symbolMargins?.find(
+                                (sm: SymbolMargin) => sm.symbol.toLowerCase() === stock.symbol.toLowerCase() && sm.symbolType === 'equity'
                               );
                               return safetyMargin ? 'text-green-700' : 'text-gray-500';
                             })()
                           }`}>
                             {(() => {
-                              const safetyMargin = safetyMargins?.find(
-                                (sm: SafetyMargin) => sm.symbol.toLowerCase() === stock.symbol.toLowerCase() && sm.type === 'equity'
+                              const safetyMargin = symbolMargins?.find(
+                                (sm: SymbolMargin) => sm.symbol.toLowerCase() === stock.symbol.toLowerCase() && sm.symbolType === 'equity'
                               );
-                              if (safetyMargin) {
+                              if (safetyMargin && safetyMargin.safetyMargin) {
                                 const safePE = calculateSafePE(stock.latestMonth.closingPrice, safetyMargin.safetyMargin);
                                 return `₹${formatPrice(safePE)}`;
                               }
@@ -1769,17 +1843,17 @@ export default function HistoricalData() {
                         </span>
                         <span className={`font-medium ${
                           (() => {
-                            const safetyMargin = safetyMargins?.find(
-                              (sm: SafetyMargin) => sm.symbol.toLowerCase() === commodity.symbol.toLowerCase() && sm.type === 'commodity'
+                            const safetyMargin = symbolMargins?.find(
+                              (sm: SymbolMargin) => sm.symbol.toLowerCase() === commodity.symbol.toLowerCase() && sm.symbolType === 'commodity'
                             );
                             return safetyMargin ? 'text-green-700' : 'text-gray-500';
                           })()
                         }`}>
                           {(() => {
-                            const safetyMargin = safetyMargins?.find(
-                              (sm: SafetyMargin) => sm.symbol.toLowerCase() === commodity.symbol.toLowerCase() && sm.type === 'commodity'
+                            const safetyMargin = symbolMargins?.find(
+                              (sm: SymbolMargin) => sm.symbol.toLowerCase() === commodity.symbol.toLowerCase() && sm.symbolType === 'commodity'
                             );
-                            if (safetyMargin) {
+                            if (safetyMargin && safetyMargin.safetyMargin) {
                               const safePE = calculateSafePE(commodity.latestMonth.closingPrice, safetyMargin.safetyMargin);
                               return `₹${formatPrice(safePE)}`;
                             }
@@ -2068,6 +2142,70 @@ export default function HistoricalData() {
         </div>
       )}
 
+      {/* Safety Margin Edit Dialog */}
+      {editingSafetyMargin && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+          <div className="bg-white rounded-lg p-6 w-96 max-w-md mx-4">
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="text-lg font-medium text-gray-900">
+                Edit Safety Margin
+              </h3>
+              <button
+                onClick={handleCancelEditSafetyMargin}
+                className="text-gray-400 hover:text-gray-600"
+              >
+                <XMarkIcon className="h-6 w-6" />
+              </button>
+            </div>
+            
+            <div className="mb-4">
+              <label className="block text-sm font-medium text-gray-700 mb-2">
+                Symbol: {editingSafetyMargin.symbol}
+              </label>
+              <label className="block text-sm font-medium text-gray-700 mb-2">
+                Current Safety Margin: {editingSafetyMargin.currentValue ? `${editingSafetyMargin.currentValue}%` : 'Not set'}
+              </label>
+            </div>
+            
+            <div className="mb-6">
+              <label className="block text-sm font-medium text-gray-700 mb-2">
+                New Safety Margin (%)
+              </label>
+              <input
+                type="number"
+                step="0.1"
+                min="0"
+                value={editingSafetyMargin.newValue}
+                onChange={(e) => setEditingSafetyMargin({
+                  ...editingSafetyMargin,
+                  newValue: e.target.value
+                })}
+                className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-primary-500 focus:border-primary-500"
+                placeholder="Enter safety margin percentage"
+              />
+              <p className="text-xs text-gray-500 mt-1">
+                Leave empty to remove safety margin
+              </p>
+            </div>
+            
+            <div className="flex justify-end space-x-3">
+              <button
+                onClick={handleCancelEditSafetyMargin}
+                className="px-4 py-2 text-sm font-medium text-gray-700 bg-gray-100 border border-gray-300 rounded-md hover:bg-gray-200 focus:outline-none focus:ring-2 focus:ring-gray-500"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleSaveSafetyMargin}
+                disabled={updateSafetyMarginMutation.isPending}
+                className="px-4 py-2 text-sm font-medium text-white bg-primary-600 border border-transparent rounded-md hover:bg-primary-700 focus:outline-none focus:ring-2 focus:ring-primary-500 disabled:opacity-50"
+              >
+                {updateSafetyMarginMutation.isPending ? 'Saving...' : 'Save'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
     </Layout>
   );

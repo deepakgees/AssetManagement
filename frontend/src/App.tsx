@@ -6,8 +6,7 @@ import Holdings from './pages/Holdings';
 import Positions from './pages/Positions';
 import PnL from './pages/PnL';
 import Dividends from './pages/Dividends';
-import SymbolAndMargins from './pages/SymbolAndMargins';
-import SafetyMargins from './pages/SafetyMargins';
+import SymbolMargins from './pages/SymbolMargins';
 import HistoricalData from './pages/HistoricalData';
 
 // Create React Query client
@@ -32,8 +31,7 @@ function App() {
             <Route path="/positions" element={<Positions />} />
             <Route path="/pnl" element={<PnL />} />
             <Route path="/dividends" element={<Dividends />} />
-            <Route path="/symbolAndMargins" element={<SymbolAndMargins />} />
-            <Route path="/safetyMargins" element={<SafetyMargins />} />
+            <Route path="/symbolMargins" element={<SymbolMargins />} />
             <Route path="/historicalData" element={<HistoricalData />} />
           </Routes>
         </div>

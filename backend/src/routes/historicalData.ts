@@ -25,14 +25,14 @@ router.get('/symbols', async (req, res) => {
   try {
     const { symbolType } = req.query;
     
-    // Return symbols from symbol_and_margins table instead of historical_data
-    const symbolPrefixes = await prisma.symbolAndMargin.findMany({
+    // Return symbols from symbol_margins table instead of historical_data
+    const symbols = await prisma.symbolMargin.findMany({
       where: symbolType ? { symbolType: symbolType as string } : {},
-      select: { symbolPrefix: true },
-      orderBy: { symbolPrefix: 'asc' }
+      select: { symbol: true },
+      orderBy: { symbol: 'asc' }
     });
 
-    res.json(symbolPrefixes.map(item => item.symbolPrefix));
+    res.json(symbols.map(item => item.symbol));
   } catch (error) {
     console.error('Error fetching symbols:', error);
     res.status(500).json({ error: 'Failed to fetch symbols' });
@@ -478,7 +478,7 @@ router.post('/download-equity', async (req, res) => {
 // Get NSE F&O equity symbols for dropdown
 router.get('/equity-symbols', async (req, res) => {
   try {
-    const symbols = getNSEFOStocksList();
+    const symbols = await getNSEFOStocksList();
     res.json(symbols);
   } catch (error) {
     console.error('Error fetching equity symbols:', error);
@@ -564,8 +564,8 @@ router.post('/commodities/bulk-upload', async (req, res) => {
 // Get NSE F&O stocks list
 router.get('/fo-stocks', async (req, res) => {
   try {
-    const stocks = getNSEFOStocksList();
-    const count = getNSEFOStocksCount();
+    const stocks = await getNSEFOStocksList();
+    const count = await getNSEFOStocksCount();
     
     res.json({
       success: true,

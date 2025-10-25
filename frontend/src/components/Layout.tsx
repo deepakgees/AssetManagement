@@ -26,8 +26,7 @@ const Layout: React.FC<LayoutProps> = ({ children }) => {
     { name: 'Positions', href: '/positions', icon: ChartBarIcon },
     { name: 'P&L', href: '/pnl', icon: CurrencyDollarIcon },
     { name: 'Dividends', href: '/dividends', icon: CurrencyDollarIcon },
-    { name: 'Symbol & Margins', href: '/symbolAndMargins', icon: TagIcon },
-    { name: 'Safety Margins', href: '/safetyMargins', icon: ShieldCheckIcon },
+    { name: 'Symbol & Margins', href: '/symbolMargins', icon: TagIcon },
     { name: 'Historical Data', href: '/historicalData', icon: ClockIcon },
   ];
 

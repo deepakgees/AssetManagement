@@ -1,8 +1,27 @@
 import axios from 'axios';
 import { PrismaClient } from '@prisma/client';
-import { getNSEFOStocks, getNSEFOStocksCount as getNSEFOStocksCountFromData } from '../data/nse-fo-stocks';
+// Removed import of hardcoded NSE F&O stocks - now using database
 
 const prisma = new PrismaClient();
+
+/**
+ * Get NSE F&O stocks from database
+ */
+async function getNSEFOStocksFromDatabase(): Promise<string[]> {
+  const stocks = await prisma.symbolMargin.findMany({
+    where: {
+      symbolType: 'equity'
+    },
+    select: {
+      symbol: true
+    },
+    orderBy: {
+      symbol: 'asc'
+    }
+  });
+  
+  return stocks.map(stock => stock.symbol);
+}
 
 // Yahoo Finance API configuration (no API key required)
 const YAHOO_FINANCE_BASE_URL = 'https://query1.finance.yahoo.com/v8/finance/chart';
@@ -353,9 +372,9 @@ export async function bulkDownloadFOStocks(startDate: Date, endDate: Date): Prom
     error?: string;
   }>;
 }> {
-  console.log(`Starting bulk download for ${getNSEFOStocksCountFromData()} NSE F&O stocks...`);
-  
-  const foStocks = getNSEFOStocks();
+  // Get NSE F&O stocks from database
+  const foStocks = await getNSEFOStocksFromDatabase();
+  console.log(`Starting bulk download for ${foStocks.length} NSE F&O stocks...`);
   const results: Array<{
     symbol: string;
     status: 'success' | 'failed';
@@ -412,13 +431,14 @@ export async function bulkDownloadFOStocks(startDate: Date, endDate: Date): Prom
 /**
  * Get NSE F&O stocks list
  */
-export function getNSEFOStocksList(): string[] {
-  return getNSEFOStocks();
+export async function getNSEFOStocksList(): Promise<string[]> {
+  return await getNSEFOStocksFromDatabase();
 }
 
 /**
  * Get NSE F&O stocks count
  */
-export function getNSEFOStocksCount(): number {
-  return getNSEFOStocksCountFromData();
+export async function getNSEFOStocksCount(): Promise<number> {
+  const stocks = await getNSEFOStocksFromDatabase();
+  return stocks.length;
 }

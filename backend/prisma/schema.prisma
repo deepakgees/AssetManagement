@@ -172,17 +172,6 @@ model DividendRecord {
   @@map("dividend_records")
 }
 
-model SymbolAndMargin {
-  id           Int      @id @default(autoincrement())
-  symbolPrefix String   @unique
-  margin       Float
-  symbolType   String   @default("equity")
-  createdAt    DateTime @default(now())
-  updatedAt    DateTime @updatedAt
-
-  @@map("symbol_and_margins")
-}
-
 model FundTransaction {
   id              Int      @id @default(autoincrement())
   accountId       Int
@@ -197,16 +186,15 @@ model FundTransaction {
   @@map("fund_transactions")
 }
 
-
 model HistoricalPriceCommodities {
   id            Int      @id @default(autoincrement())
   symbol        String
-  year          Int
-  month         Int
   closingPrice  Float
   percentChange Float?
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt
+  year          Int
+  month         Int
 
   @@unique([symbol, year, month], name: "unique_commodity_symbol_year_month")
   @@map("historical_price_commodities")
@@ -226,14 +214,38 @@ model HistoricalPriceEquity {
   @@map("historical_price_equity")
 }
 
-model SafetyMargin {
-  id            Int      @id @default(autoincrement())
-  symbol        String
-  safetyMargin  Float
-  type          String   @default("commodity") // commodity or equity
-  createdAt     DateTime @default(now())
-  updatedAt     DateTime @updatedAt
+model SymbolMargin {
+  id           Int      @id @default(autoincrement())
+  symbol       String
+  margin       Float
+  safetyMargin Float?   @map("safety_margin")
+  symbolType   String   @default("equity") @map("symbol_type")
+  createdAt    DateTime @default(now()) @map("created_at")
+  updatedAt    DateTime @updatedAt @map("updated_at")
 
-  @@unique([symbol, type], name: "unique_safety_margin_symbol_type")
-  @@map("safety_margins")
+  @@unique([symbol, symbolType], name: "unique_symbol_margin_symbol_type", map: "unique_symbol_margin_symbol_type")
+  @@index([createdAt], map: "idx_symbol_margins_created_at")
+  @@index([symbol], map: "idx_symbol_margins_symbol")
+  @@index([symbolType], map: "idx_symbol_margins_symbol_type")
+  @@map("symbol_margins")
+}
+
+model safety_margins {
+  id           Int      @id @default(autoincrement())
+  symbol       String
+  safetyMargin Float
+  type         String   @default("commodity")
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime
+
+  @@unique([symbol, type], map: "unique_safety_margin_symbol_type")
+}
+
+model symbol_and_margins {
+  id           Int      @id @default(autoincrement())
+  symbolPrefix String   @unique
+  margin       Float
+  symbolType   String   @default("equity")
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime
 }

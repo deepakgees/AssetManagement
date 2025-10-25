@@ -16,9 +16,9 @@ async function getMarginForSymbol(tradingSymbol: string): Promise<number> {
     const symbolPrefix = extractSymbolPrefix(tradingSymbol);
     console.log(`Looking up margin for symbol: "${tradingSymbol}" -> prefix: "${symbolPrefix}"`);
     
-    const symbolMargin = await prisma.symbolAndMargin.findFirst({
+    const symbolMargin = await prisma.symbolMargin.findFirst({
       where: {
-        symbolPrefix: {
+        symbol: {
           equals: symbolPrefix,
           mode: 'insensitive'
         }
@@ -39,7 +39,7 @@ const router = express.Router();
 router.get('/debug-margins', async (req: Request, res: Response) => {
   try {
     // Get all margin records
-    const allMargins = await prisma.symbolAndMargin.findMany();
+    const allMargins = await prisma.symbolMargin.findMany();
     console.log('All margin records:', allMargins);
     
     // Test with a sample symbol

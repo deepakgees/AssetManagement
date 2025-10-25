@@ -13,16 +13,16 @@ import {
 } from '@heroicons/react/24/outline';
 import Layout from '../components/Layout';
 import { 
-  getSymbolAndMargins, 
-  createSymbolAndMargin, 
-  updateSymbolAndMargin, 
-  deleteSymbolAndMargin,
-  syncCommodities,
-  syncEquities,
-  type SymbolAndMargin,
-  type CreateSymbolAndMarginData,
-  type UpdateSymbolAndMarginData
-} from '../services/symbolAndMarginsService';
+  getSymbolMargins, 
+  createSymbolMargin, 
+  updateSymbolMargin, 
+  deleteSymbolMargin,
+  getHistoricalCount,
+  type SymbolMargin,
+  type CreateSymbolMarginData,
+  type UpdateSymbolMarginData,
+  type HistoricalCountData
+} from '../services/symbolMarginsService';
 
 interface Message {
   id: string;
@@ -31,19 +31,22 @@ interface Message {
   timestamp: Date;
 }
 
-interface SymbolAndMarginFormData {
-  symbolPrefix: string;
+interface SymbolMarginFormData {
+  symbol: string;
   margin: string;
+  safetyMargin: string;
   symbolType: string;
 }
 
-export default function SymbolAndMargins() {
+
+export default function SymbolMargins() {
   const [openDialog, setOpenDialog] = useState(false);
-  const [editingRecord, setEditingRecord] = useState<SymbolAndMargin | null>(null);
+  const [editingRecord, setEditingRecord] = useState<SymbolMargin | null>(null);
   const [messages, setMessages] = useState<Message[]>([]);
-  const [formData, setFormData] = useState<SymbolAndMarginFormData>({
-    symbolPrefix: '',
+  const [formData, setFormData] = useState<SymbolMarginFormData>({
+    symbol: '',
     margin: '',
+    safetyMargin: '',
     symbolType: 'equity',
   });
 
@@ -71,19 +74,22 @@ export default function SymbolAndMargins() {
     setMessages(prev => prev.filter(msg => msg.id !== messageId));
   };
 
+  // Build query parameters for API call
+  const queryParams: any = {};
+
   // API calls
   const { data: records, isLoading } = useQuery({
-    queryKey: ['symbolAndMargins'],
-    queryFn: getSymbolAndMargins,
+    queryKey: ['symbolMargins', queryParams],
+    queryFn: () => getSymbolMargins(queryParams),
     refetchInterval: 30000,
   });
 
   const addRecordMutation = useMutation({
-    mutationFn: (newRecord: CreateSymbolAndMarginData) => createSymbolAndMargin(newRecord),
+    mutationFn: (newRecord: CreateSymbolMarginData) => createSymbolMargin(newRecord),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['symbolAndMargins'] });
+      queryClient.invalidateQueries({ queryKey: ['symbolMargins'] });
       handleCloseDialog();
-      addMessage('success', 'Symbol and margin record created successfully!');
+      addMessage('success', 'Symbol margin record created successfully!');
     },
     onError: (error: any) => {
       addMessage('error', `Failed to create record: ${error.response?.data?.message || error.message}`);
@@ -91,11 +97,11 @@ export default function SymbolAndMargins() {
   });
 
   const updateRecordMutation = useMutation({
-    mutationFn: ({ id, ...data }: { id: number } & UpdateSymbolAndMarginData) => updateSymbolAndMargin(id, data),
+    mutationFn: ({ id, ...data }: { id: number } & UpdateSymbolMarginData) => updateSymbolMargin(id, data),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['symbolAndMargins'] });
+      queryClient.invalidateQueries({ queryKey: ['symbolMargins'] });
       handleCloseDialog();
-      addMessage('success', 'Symbol and margin record updated successfully!');
+      addMessage('success', 'Symbol margin record updated successfully!');
     },
     onError: (error: any) => {
       addMessage('error', `Failed to update record: ${error.response?.data?.message || error.message}`);
@@ -103,51 +109,38 @@ export default function SymbolAndMargins() {
   });
 
   const deleteRecordMutation = useMutation({
-    mutationFn: deleteSymbolAndMargin,
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['symbolAndMargins'] });
-      addMessage('success', 'Symbol and margin record deleted successfully!');
+    mutationFn: deleteSymbolMargin,
+    onSuccess: (data, variables, context) => {
+      queryClient.invalidateQueries({ queryKey: ['symbolMargins'] });
+      // Check if it was an equity symbol by looking at the deleted record
+      const deletedRecord = records?.find(r => r.id === variables);
+      if (deletedRecord?.symbolType === 'equity') {
+        addMessage('success', `Equity symbol '${deletedRecord.symbol}' and its historical data deleted successfully!`);
+      } else {
+        addMessage('success', 'Symbol margin record deleted successfully!');
+      }
     },
     onError: (error: any) => {
       addMessage('error', `Failed to delete record: ${error.response?.data?.message || error.message}`);
     },
   });
 
-  const syncCommoditiesMutation = useMutation({
-    mutationFn: syncCommodities,
-    onSuccess: (data) => {
-      queryClient.invalidateQueries({ queryKey: ['symbolAndMargins'] });
-      addMessage('success', `Commodities synced successfully! Created: ${data.stats.created}, Updated: ${data.stats.updated}`);
-    },
-    onError: (error: any) => {
-      addMessage('error', `Failed to sync commodities: ${error.response?.data?.message || error.message}`);
-    },
-  });
 
-  const syncEquitiesMutation = useMutation({
-    mutationFn: syncEquities,
-    onSuccess: (data) => {
-      queryClient.invalidateQueries({ queryKey: ['symbolAndMargins'] });
-      addMessage('success', `Equities synced successfully! Created: ${data.stats.created}, Updated: ${data.stats.updated}`);
-    },
-    onError: (error: any) => {
-      addMessage('error', `Failed to sync equities: ${error.response?.data?.message || error.message}`);
-    },
-  });
-
-  const handleOpenDialog = (record?: SymbolAndMargin) => {
+  const handleOpenDialog = (record?: SymbolMargin) => {
     if (record) {
       setEditingRecord(record);
       setFormData({
-        symbolPrefix: record.symbolPrefix,
+        symbol: record.symbol,
         margin: record.margin.toString(),
+        safetyMargin: record.safetyMargin?.toString() || '',
         symbolType: record.symbolType,
       });
     } else {
       setEditingRecord(null);
       setFormData({
-        symbolPrefix: '',
+        symbol: '',
         margin: '',
+        safetyMargin: '',
         symbolType: 'equity',
       });
     }
@@ -158,46 +151,75 @@ export default function SymbolAndMargins() {
     setOpenDialog(false);
     setEditingRecord(null);
     setFormData({
-      symbolPrefix: '',
+      symbol: '',
       margin: '',
+      safetyMargin: '',
       symbolType: 'equity',
     });
   };
 
   const handleSubmit = () => {
-    if (!formData.symbolPrefix.trim()) {
-      addMessage('error', 'Please fill in the symbol prefix');
+    if (!formData.symbol.trim()) {
+      addMessage('error', 'Please fill in the symbol');
       return;
     }
 
-    if (!formData.margin.trim() || isNaN(parseFloat(formData.margin)) || parseFloat(formData.margin) < 0) {
+    if (formData.margin.trim() && (isNaN(parseFloat(formData.margin)) || parseFloat(formData.margin) < 0)) {
       addMessage('error', 'Please enter a valid positive margin value');
       return;
     }
 
-    const marginValue = parseFloat(formData.margin);
+    if (formData.safetyMargin.trim() && (isNaN(parseFloat(formData.safetyMargin)) || parseFloat(formData.safetyMargin) < 0 || parseFloat(formData.safetyMargin) > 100)) {
+      addMessage('error', 'Please enter a valid safety margin value between 0 and 100');
+      return;
+    }
+
+    const marginValue = formData.margin.trim() ? parseFloat(formData.margin) : 0;
+    const safetyMarginValue = formData.safetyMargin.trim() ? parseFloat(formData.safetyMargin) : undefined;
 
     if (editingRecord) {
       updateRecordMutation.mutate({
         id: editingRecord.id,
-        symbolPrefix: formData.symbolPrefix.trim(),
+        symbol: formData.symbol.trim(),
         margin: marginValue,
+        safetyMargin: safetyMarginValue,
         symbolType: formData.symbolType,
       });
     } else {
       addRecordMutation.mutate({
-        symbolPrefix: formData.symbolPrefix.trim(),
+        symbol: formData.symbol.trim(),
         margin: marginValue,
+        safetyMargin: safetyMarginValue,
         symbolType: formData.symbolType,
       });
     }
   };
 
-  const handleDelete = (recordId: number) => {
-    if (window.confirm('Are you sure you want to delete this symbol and margin record?')) {
+  const handleDelete = async (recordId: number, symbolType: string) => {
+    let confirmMessage = 'Are you sure you want to delete this symbol margin record?';
+    
+    if (symbolType === 'equity') {
+      try {
+        // Fetch historical record count for equity symbols
+        const historicalData: HistoricalCountData = await getHistoricalCount(recordId);
+        const { symbol, historicalCount } = historicalData;
+        
+        if (historicalCount > 0) {
+          confirmMessage = `Are you sure you want to delete the equity symbol '${symbol}'?\n\n⚠️ WARNING: This will also delete ${historicalCount} historical price record(s) for this symbol from the database.\n\nThis action cannot be undone.`;
+        } else {
+          confirmMessage = `Are you sure you want to delete the equity symbol '${symbol}'?\n\nNote: No historical price data found for this symbol.`;
+        }
+      } catch (error) {
+        console.error('Error fetching historical count:', error);
+        confirmMessage = `Are you sure you want to delete this equity symbol?\n\n⚠️ WARNING: This will also delete ALL historical price data for this symbol from the database. This action cannot be undone.`;
+      }
+    }
+    
+    if (window.confirm(confirmMessage)) {
       deleteRecordMutation.mutate(recordId);
     }
   };
+
 
   const formatDate = (dateString: string) => {
     return new Date(dateString).toLocaleString();
@@ -216,36 +238,8 @@ export default function SymbolAndMargins() {
   return (
     <Layout>
       <div className="mb-6 flex justify-between items-center">
-        <h1 className="text-2xl font-bold text-gray-900">Symbol and Margin Management</h1>
+        <h1 className="text-2xl font-bold text-gray-900">Symbol & Margin Management</h1>
         <div className="flex space-x-3">
-          <button
-            onClick={() => syncCommoditiesMutation.mutate()}
-            disabled={syncCommoditiesMutation.isPending}
-            className="inline-flex items-center px-4 py-2 border border-gray-300 text-sm font-medium rounded-md shadow-sm text-gray-700 bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-primary-500 disabled:opacity-50 disabled:cursor-not-allowed"
-          >
-            {syncCommoditiesMutation.isPending ? (
-              <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-gray-600 mr-2"></div>
-            ) : (
-              <svg className="h-4 w-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
-              </svg>
-            )}
-            {syncCommoditiesMutation.isPending ? 'Syncing...' : 'Sync Commodities'}
-          </button>
-          <button
-            onClick={() => syncEquitiesMutation.mutate()}
-            disabled={syncEquitiesMutation.isPending}
-            className="inline-flex items-center px-4 py-2 border border-gray-300 text-sm font-medium rounded-md shadow-sm text-gray-700 bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-primary-500 disabled:opacity-50 disabled:cursor-not-allowed"
-          >
-            {syncEquitiesMutation.isPending ? (
-              <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-gray-600 mr-2"></div>
-            ) : (
-              <svg className="h-4 w-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
-              </svg>
-            )}
-            {syncEquitiesMutation.isPending ? 'Syncing...' : 'Sync Equities'}
-          </button>
           <button
             onClick={() => handleOpenDialog()}
             className="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md shadow-sm text-white bg-primary-600 hover:bg-primary-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-primary-500"
@@ -256,13 +250,14 @@ export default function SymbolAndMargins() {
         </div>
       </div>
 
+
       <div className="bg-white shadow rounded-lg">
         <div className="px-6 py-4 border-b border-gray-200">
           <h2 className="text-lg font-medium text-gray-900">
-            Symbol and Margin Records ({records?.length || 0})
+            Symbol & Margin Records ({records?.length || 0})
           </h2>
           <p className="text-sm text-gray-600 mt-1">
-            Manage symbol prefixes and their corresponding margin values
+            Manage symbol margins and safety margins for all trading instruments
           </p>
         </div>
 
@@ -271,13 +266,16 @@ export default function SymbolAndMargins() {
             <thead className="bg-gray-50">
               <tr>
                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                  Symbol Prefix
+                  Symbol
                 </th>
                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
                   Margin
                 </th>
                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                  Symbol Type
+                  Safety Margin
+                </th>
+                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                  Type
                 </th>
                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
                   Created
@@ -294,10 +292,15 @@ export default function SymbolAndMargins() {
               {records?.map((record) => (
                 <tr key={record.id} className="hover:bg-gray-50">
                   <td className="px-6 py-4 whitespace-nowrap">
-                    <div className="text-sm font-medium text-gray-900">{record.symbolPrefix}</div>
+                    <div className="text-sm font-medium text-gray-900">{record.symbol}</div>
                   </td>
                   <td className="px-6 py-4 whitespace-nowrap">
                     <div className="text-sm text-gray-900">{record.margin.toFixed(2)}</div>
+                  </td>
+                  <td className="px-6 py-4 whitespace-nowrap">
+                    <div className="text-sm text-gray-900">
+                      {record.safetyMargin ? `${record.safetyMargin.toFixed(2)}%` : '-'}
+                    </div>
                   </td>
                   <td className="px-6 py-4 whitespace-nowrap">
                     <span className={`inline-flex px-2 py-1 text-xs font-semibold rounded-full ${
@@ -325,7 +328,7 @@ export default function SymbolAndMargins() {
                       <PencilIcon className="h-4 w-4" />
                     </button>
                     <button
-                      onClick={() => handleDelete(record.id)}
+                      onClick={() => handleDelete(record.id, record.symbolType)}
                       className="text-red-600 hover:text-red-900"
                       title="Delete Record"
                     >
@@ -340,7 +343,7 @@ export default function SymbolAndMargins() {
 
         {records?.length === 0 && (
           <div className="text-center py-12">
-            <div className="text-gray-500 text-lg">No symbol and margin records found</div>
+            <div className="text-gray-500 text-lg">No symbol margin records found</div>
             <div className="text-gray-400 text-sm mt-2">Click "Add Record" to create your first record</div>
           </div>
         )}
@@ -375,25 +378,25 @@ export default function SymbolAndMargins() {
                 <Dialog.Panel className="relative transform overflow-hidden rounded-lg bg-white px-4 pb-4 pt-5 text-left shadow-xl transition-all sm:my-8 sm:w-full sm:max-w-lg sm:p-6">
                   <div>
                     <Dialog.Title as="h3" className="text-lg font-medium leading-6 text-gray-900 mb-4">
-                      {editingRecord ? 'Edit Symbol and Margin Record' : 'Add New Symbol and Margin Record'}
+                      {editingRecord ? 'Edit Symbol Margin Record' : 'Add New Symbol Margin Record'}
                     </Dialog.Title>
                     <div className="space-y-4">
                       <div>
                         <label className="block text-sm font-medium text-gray-700">
-                          Symbol Prefix *
+                          Symbol *
                         </label>
                         <input
                           type="text"
-                          value={formData.symbolPrefix}
-                          onChange={(e) => setFormData({ ...formData, symbolPrefix: e.target.value })}
+                          value={formData.symbol}
+                          onChange={(e) => setFormData({ ...formData, symbol: e.target.value })}
                           className="mt-1 block w-full border border-gray-300 rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-primary-500 focus:border-primary-500"
-                          placeholder="e.g., RELIANCE, TCS, INFY"
+                          placeholder="e.g., RELIANCE, GOLD, SILVER"
                           required
                         />
                       </div>
                       <div>
                         <label className="block text-sm font-medium text-gray-700">
-                          Margin *
+                          Margin
                         </label>
                         <input
                           type="number"
@@ -402,27 +405,41 @@ export default function SymbolAndMargins() {
                           value={formData.margin}
                           onChange={(e) => setFormData({ ...formData, margin: e.target.value })}
                           className="mt-1 block w-full border border-gray-300 rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-primary-500 focus:border-primary-500"
-                          placeholder="e.g., 1000.50"
-                          required
+                          placeholder="e.g., 1000.50 (optional)"
                         />
                       </div>
-                    </div>
-                    
-                    <div className="mt-4">
-                      <label className="block text-sm font-medium text-gray-700">
-                        Symbol Type *
-                      </label>
-                      <select
-                        value={formData.symbolType}
-                        onChange={(e) => setFormData({ ...formData, symbolType: e.target.value })}
-                        className="mt-1 block w-full border border-gray-300 rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-primary-500 focus:border-primary-500"
-                        required
-                      >
-                        <option value="equity">Equity</option>
-                        <option value="commodity">Commodity</option>
-                        <option value="currency">Currency</option>
-                        <option value="debt">Debt</option>
-                      </select>
+                      <div>
+                        <label className="block text-sm font-medium text-gray-700">
+                          Safety Margin (%)
+                        </label>
+                        <input
+                          type="number"
+                          step="0.01"
+                          min="0"
+                          max="100"
+                          value={formData.safetyMargin}
+                          onChange={(e) => setFormData({ ...formData, safetyMargin: e.target.value })}
+                          className="mt-1 block w-full border border-gray-300 rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-primary-500 focus:border-primary-500"
+                          placeholder="e.g., 5.0 (for 5% safety margin)"
+                        />
+                        <p className="mt-1 text-xs text-gray-500">
+                          Optional: Enter the percentage safety margin (0-100) for determining put option strike prices
+                        </p>
+                      </div>
+                      <div>
+                        <label className="block text-sm font-medium text-gray-700">
+                          Symbol Type *
+                        </label>
+                        <select
+                          value={formData.symbolType}
+                          onChange={(e) => setFormData({ ...formData, symbolType: e.target.value })}
+                          className="mt-1 block w-full border border-gray-300 rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-primary-500 focus:border-primary-500"
+                          required
+                        >
+                          <option value="equity">Equity</option>
+                          <option value="commodity">Commodity</option>
+                        </select>
+                      </div>
                     </div>
                   </div>
                   <div className="mt-6 flex justify-end space-x-3">
