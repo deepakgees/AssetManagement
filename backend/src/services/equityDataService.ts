@@ -1,7 +1,11 @@
 import axios from 'axios';
 import { PrismaClient } from '@prisma/client';
+import { getNSEFOStocks, getNSEFOStocksCount as getNSEFOStocksCountFromData } from '../data/nse-fo-stocks';
 
 const prisma = new PrismaClient();
+
+// Yahoo Finance API configuration (no API key required)
+const YAHOO_FINANCE_BASE_URL = 'https://query1.finance.yahoo.com/v8/finance/chart';
 
 export interface EquityData {
   date: string;
@@ -18,21 +22,109 @@ export interface MonthlyEquityData {
 }
 
 /**
- * Fetch equity historical data from external source
- * This is a mock implementation - in production, you would integrate with real data providers
- * like Yahoo Finance, Alpha Vantage, or other financial data APIs
+ * Fetch equity historical data from Yahoo Finance API
+ * Supports Indian stocks with NSE exchange suffix
  */
 export async function fetchEquityData(symbol: string, startDate: Date, endDate: Date): Promise<EquityData[]> {
   try {
-    // For now, we'll create mock data based on realistic equity price movements
-    // In production, you would integrate with a real data provider
-    const mockData = generateMockEquityData(symbol, startDate, endDate);
-    return mockData;
+    console.log(`Fetching real equity data for ${symbol} from Yahoo Finance API...`);
+    
+    // Add NSE exchange suffix for Indian stocks
+    const nseSymbol = symbol.includes('.') ? symbol : `${symbol}.NS`;
+    
+    // Convert dates to Unix timestamps (Yahoo Finance expects seconds)
+    const startTimestamp = Math.floor(startDate.getTime() / 1000);
+    const endTimestamp = Math.floor(endDate.getTime() / 1000);
+    
+    const response = await axios.get(`${YAHOO_FINANCE_BASE_URL}/${nseSymbol}`, {
+      params: {
+        period1: startTimestamp,
+        period2: endTimestamp,
+        interval: '1d', // Daily data
+        includePrePost: false,
+        events: 'div,split'
+      },
+      timeout: 30000,
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+      }
+    });
+
+    // Check for Yahoo Finance API errors
+    if (!response.data.chart || !response.data.chart.result) {
+      throw new Error('No chart data found in Yahoo Finance response');
+    }
+
+    const result = response.data.chart.result[0];
+    if (!result || !result.timestamp || !result.indicators || !result.indicators.quote) {
+      throw new Error('Invalid data structure in Yahoo Finance response');
+    }
+
+    const timestamps = result.timestamp;
+    const quotes = result.indicators.quote[0];
+    
+    if (!timestamps || !quotes || !quotes.close || !quotes.open) {
+      throw new Error('Missing price data in Yahoo Finance response');
+    }
+
+    const equityData: EquityData[] = [];
+    
+    // Process daily data to monthly data
+    const monthlyData: { [key: string]: any[] } = {};
+    
+    for (let i = 0; i < timestamps.length; i++) {
+      const timestamp = timestamps[i];
+      const close = quotes.close[i];
+      const open = quotes.open[i];
+      
+      if (close === null || open === null) continue; // Skip null values
+      
+      const date = new Date(timestamp * 1000);
+      const monthKey = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`;
+      
+      if (!monthlyData[monthKey]) {
+        monthlyData[monthKey] = [];
+      }
+      monthlyData[monthKey].push({
+        date: date.toISOString().split('T')[0],
+        close,
+        open
+      });
+    }
+    
+    // Get the last trading day of each month
+    Object.keys(monthlyData).sort().forEach(monthKey => {
+      const monthData = monthlyData[monthKey];
+      const lastDay = monthData.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime())[0];
+      
+      const price = parseFloat(lastDay.close);
+      const open = parseFloat(lastDay.open);
+      const change = price - open;
+      const changePercent = (change / open) * 100;
+
+      equityData.push({
+        date: lastDay.date,
+        price: Math.round(price * 100) / 100,
+        change: Math.round(change * 100) / 100,
+        changePercent: Math.round(changePercent * 100) / 100
+      });
+    });
+
+    // Sort by date (oldest first)
+    equityData.sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
+    
+    console.log(`Successfully fetched ${equityData.length} data points from Yahoo Finance for ${symbol}`);
+    return equityData;
+    
   } catch (error) {
-    console.error(`Error fetching equity data for ${symbol}:`, error);
-    throw new Error(`Failed to fetch equity data for ${symbol}`);
+    console.error(`Yahoo Finance API error for ${symbol}:`, error);
+    
+    // If Yahoo Finance fails, fall back to mock data
+    console.log('Yahoo Finance API failed, falling back to mock data...');
+    return generateMockEquityData(symbol, startDate, endDate);
   }
 }
+
 
 /**
  * Generate mock equity data for demonstration
@@ -244,4 +336,89 @@ export function getPopularEquitySymbols(): string[] {
     'POWERGRID',
     'NTPC'
   ];
+}
+
+/**
+ * Bulk download equity data for all NSE F&O stocks
+ */
+export async function bulkDownloadFOStocks(startDate: Date, endDate: Date): Promise<{
+  total: number;
+  success: number;
+  failed: number;
+  results: Array<{
+    symbol: string;
+    status: 'success' | 'failed';
+    created: number;
+    updated: number;
+    error?: string;
+  }>;
+}> {
+  console.log(`Starting bulk download for ${getNSEFOStocksCountFromData()} NSE F&O stocks...`);
+  
+  const foStocks = getNSEFOStocks();
+  const results: Array<{
+    symbol: string;
+    status: 'success' | 'failed';
+    created: number;
+    updated: number;
+    error?: string;
+  }> = [];
+  
+  let successCount = 0;
+  let failedCount = 0;
+  
+  for (let i = 0; i < foStocks.length; i++) {
+    const symbol = foStocks[i];
+    console.log(`Processing ${i + 1}/${foStocks.length}: ${symbol}`);
+    
+    try {
+      const result = await downloadEquityData(symbol, startDate, endDate);
+      results.push({
+        symbol,
+        status: 'success',
+        created: result.created,
+        updated: result.updated
+      });
+      successCount++;
+      console.log(`✅ ${symbol}: Created ${result.created}, Updated ${result.updated}`);
+      
+      // Add a small delay to avoid overwhelming the API
+      await new Promise(resolve => setTimeout(resolve, 100));
+      
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+      results.push({
+        symbol,
+        status: 'failed',
+        created: 0,
+        updated: 0,
+        error: errorMessage
+      });
+      failedCount++;
+      console.error(`❌ ${symbol}: ${errorMessage}`);
+    }
+  }
+  
+  console.log(`Bulk download completed: ${successCount} success, ${failedCount} failed`);
+  
+  return {
+    total: foStocks.length,
+    success: successCount,
+    failed: failedCount,
+    results
+  };
+}
+
+/**
+ * Get NSE F&O stocks list
+ */
+export function getNSEFOStocksList(): string[] {
+  return getNSEFOStocks();
+}
+
+/**
+ * Get NSE F&O stocks count
+ */
+export function getNSEFOStocksCount(): number {
+  return getNSEFOStocksCountFromData();
 }

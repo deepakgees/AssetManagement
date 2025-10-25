@@ -248,6 +248,72 @@ export const downloadEquityData = async (symbol: string, startDate: string, endD
   return response.data.data;
 };
 
+export const getNSEFOStocks = async (): Promise<{ stocks: string[]; count: number }> => {
+  const response = await axios.get(`${API_BASE_URL}/historicalData/fo-stocks`);
+  return response.data.data;
+};
+
+export const bulkDownloadFOStocks = async (startDate: string, endDate: string): Promise<{
+  total: number;
+  success: number;
+  failed: number;
+  results: Array<{
+    symbol: string;
+    status: 'success' | 'failed';
+    created: number;
+    updated: number;
+    error?: string;
+  }>;
+}> => {
+  const response = await axios.post(`${API_BASE_URL}/historicalData/bulk-download-fo`, {
+    startDate,
+    endDate
+  });
+  return response.data.data;
+};
+
+// Equity chart data
+export const getEquityChartData = async (symbols: string[]): Promise<any[]> => {
+  const response = await axios.get(`${API_BASE_URL}/historicalData/equity-chart-data`, {
+    params: { symbols: symbols.join(',') }
+  });
+  return response.data;
+};
+
+// Equity seasonal data
+export const getEquitySeasonalData = async (symbol: string): Promise<any[]> => {
+  const response = await axios.get(`${API_BASE_URL}/historicalData/equity-seasonal-data/${symbol}`);
+  return response.data;
+};
+
+// Get equity statistics for selected stocks
+export const getEquityStats = async (symbols: string[]): Promise<Array<{
+  symbol: string;
+  totalRecords: number;
+  topFalls: Array<{
+    year: number;
+    month: number;
+    percentChange: number;
+    closingPrice: number;
+  }>;
+  timeRange: string;
+  latestMonth: {
+    year: number;
+    month: number;
+    closingPrice: number;
+  } | null;
+  previousMonthReturn: {
+    percentChange: number;
+    previousPrice: number;
+    currentPrice: number;
+  } | null;
+}>> => {
+  const response = await axios.get(`${API_BASE_URL}/historicalData/equity-stats`, {
+    params: { symbols: symbols.join(',') }
+  });
+  return response.data;
+};
+
 // Get popular equity symbols
 export const getEquitySymbols = async (): Promise<string[]> => {
   const response = await axios.get(`${API_BASE_URL}/historicalData/equity-symbols`);

@@ -11,6 +11,10 @@ import {
   ExclamationTriangleIcon,
   InformationCircleIcon,
   ChartBarIcon,
+  ChevronLeftIcon,
+  ChevronRightIcon,
+  ChevronUpIcon,
+  ChevronDownIcon,
 } from '@heroicons/react/24/outline';
 import Layout from '../components/Layout';
 import { 
@@ -29,6 +33,11 @@ import {
   getEquitySymbols,
   getHistoricalPriceEquity,
   bulkUploadCommodityData,
+  getNSEFOStocks,
+  bulkDownloadFOStocks,
+  getEquityChartData,
+  getEquitySeasonalData,
+  getEquityStats,
   getCommodityStats,
   getCommodityChartData,
   getCommoditySeasonalData,
@@ -204,6 +213,15 @@ export default function HistoricalData() {
     startDate: '',
     endDate: '',
   });
+
+  // Bulk download state
+  const [bulkDownloadData, setBulkDownloadData] = useState({
+    startDate: '',
+    endDate: '',
+  });
+  const [showBulkDownload, setShowBulkDownload] = useState(false);
+  const [foStocksCount, setFoStocksCount] = useState(0);
+
   const [showBulkUpload, setShowBulkUpload] = useState(false);
   const [csvFile, setCsvFile] = useState<File | null>(null);
   const [parsedData, setParsedData] = useState<any[]>([]);
@@ -212,6 +230,15 @@ export default function HistoricalData() {
   // Pagination state
   const [currentPage, setCurrentPage] = useState(1);
   const [itemsPerPage] = useState(10);
+  
+  // Equity table pagination state
+  const [equityCurrentPage, setEquityCurrentPage] = useState(1);
+  const [equityItemsPerPage] = useState(10);
+  
+  // Equity table sorting state
+  const [equitySortField, setEquitySortField] = useState<string>('symbol');
+  const [equitySortDirection, setEquitySortDirection] = useState<'asc' | 'desc'>('asc');
+  const [equitySortedData, setEquitySortedData] = useState<any[]>([]);
   const [isParsing, setIsParsing] = useState(false);
   
   // Chart legend state
@@ -415,14 +442,6 @@ export default function HistoricalData() {
     queryFn: getEquitySymbols,
   });
 
-  // Fetch equity data when on equities tab
-  const { data: equityData } = useQuery({
-    queryKey: ['historicalPriceEquity'],
-    queryFn: () => getHistoricalPriceEquity({ 
-      limit: 120 
-    }),
-    enabled: activeTab === 'equities',
-  });
 
   const addRecordMutation = useMutation({
     mutationFn: (newRecord: CreateHistoricalDataData) => createHistoricalData(newRecord),
@@ -515,6 +534,136 @@ export default function HistoricalData() {
       addMessage('error', `Failed to download equity data: ${error.response?.data?.message || error.message}`);
     },
   });
+
+  // Bulk download mutation
+  const bulkDownloadMutation = useMutation({
+    mutationFn: ({ startDate, endDate }: { startDate: string; endDate: string }) => 
+      bulkDownloadFOStocks(startDate, endDate),
+    onSuccess: (data) => {
+      queryClient.invalidateQueries({ queryKey: ['historicalData'] });
+      queryClient.invalidateQueries({ queryKey: ['historicalDataStats'] });
+      queryClient.invalidateQueries({ queryKey: ['historicalPriceEquity'] });
+      setShowBulkDownload(false);
+      setBulkDownloadData({ startDate: '', endDate: '' });
+      addMessage('success', `Bulk download completed! Total: ${data.total}, Success: ${data.success}, Failed: ${data.failed}`);
+    },
+    onError: (error: any) => {
+      addMessage('error', `Failed to perform bulk download: ${error.response?.data?.error || error.message}`);
+    },
+  });
+
+  // Get F&O stocks count
+  const { data: foStocksData } = useQuery({
+    queryKey: ['foStocks'],
+    queryFn: getNSEFOStocks,
+    staleTime: 5 * 60 * 1000, // 5 minutes
+  });
+
+  // Equity data queries
+  const { data: equityData } = useQuery({
+    queryKey: ['historicalPriceEquity', activeTab, currentPage, itemsPerPage],
+    queryFn: () => getHistoricalPriceEquity({ 
+      limit: itemsPerPage 
+    }),
+    enabled: activeTab === 'equities',
+  });
+
+
+
+  // Fetch equity statistics for all F&O stocks
+  const { data: equityStatsData, isLoading: equityStatsLoading, error: equityStatsError } = useQuery({
+    queryKey: ['equityStats', 'all'],
+    queryFn: () => getEquityStats(foStocksData?.stocks || []),
+    enabled: activeTab === 'equities' && foStocksData?.stocks && foStocksData.stocks.length > 0,
+  });
+
+  // Debug logging
+  useEffect(() => {
+    if (activeTab === 'equities') {
+      console.log('Equity stats data:', equityStatsData);
+      console.log('Equity stats loading:', equityStatsLoading);
+      console.log('Equity stats error:', equityStatsError);
+    }
+  }, [equityStatsData, equityStatsLoading, equityStatsError, activeTab]);
+
+  // Equity table sorting effect
+  useEffect(() => {
+    if (!equityStatsData || equityStatsData.length === 0) {
+      setEquitySortedData([]);
+      return;
+    }
+    
+    const sorted = [...equityStatsData].sort((a, b) => {
+      let aValue: any;
+      let bValue: any;
+
+      switch (equitySortField) {
+        case 'symbol':
+          aValue = a.symbol;
+          bValue = b.symbol;
+          break;
+        case 'closingPrice':
+          aValue = a.latestMonth?.closingPrice || 0;
+          bValue = b.latestMonth?.closingPrice || 0;
+          break;
+        case 'previousMonthReturn':
+          aValue = a.previousMonthReturn?.percentChange || 0;
+          bValue = b.previousMonthReturn?.percentChange || 0;
+          break;
+        case 'safetyMargin':
+          aValue = getSafetyMarginForSymbol(a.symbol);
+          bValue = getSafetyMarginForSymbol(b.symbol);
+          // Handle 'NA' values
+          if (aValue === 'NA') aValue = -1;
+          if (bValue === 'NA') bValue = -1;
+          aValue = parseFloat(aValue.toString().replace('%', ''));
+          bValue = parseFloat(bValue.toString().replace('%', ''));
+          break;
+        case 'safePE':
+          const aSafetyMargin = safetyMargins?.find(
+            (sm: SafetyMargin) => sm.symbol.toLowerCase() === a.symbol.toLowerCase() && sm.type === 'equity'
+          );
+          const bSafetyMargin = safetyMargins?.find(
+            (sm: SafetyMargin) => sm.symbol.toLowerCase() === b.symbol.toLowerCase() && sm.type === 'equity'
+          );
+          aValue = aSafetyMargin && a.latestMonth ? calculateSafePE(a.latestMonth.closingPrice, aSafetyMargin.safetyMargin) : 0;
+          bValue = bSafetyMargin && b.latestMonth ? calculateSafePE(b.latestMonth.closingPrice, bSafetyMargin.safetyMargin) : 0;
+          break;
+        case 'successRate':
+          const aNextMonth = a.latestMonth ? getNextMonth(a.latestMonth.year, a.latestMonth.month) : null;
+          const bNextMonth = b.latestMonth ? getNextMonth(b.latestMonth.year, b.latestMonth.month) : null;
+          aValue = aNextMonth ? getSuccessRateForMonth(a.symbol, aNextMonth.month) : 0;
+          bValue = bNextMonth ? getSuccessRateForMonth(b.symbol, bNextMonth.month) : 0;
+          break;
+        case 'topFalls':
+          aValue = a.topFalls && a.topFalls.length > 0 ? Math.min(...a.topFalls.map((fall: any) => fall.percentChange)) : 0;
+          bValue = b.topFalls && b.topFalls.length > 0 ? Math.min(...b.topFalls.map((fall: any) => fall.percentChange)) : 0;
+          break;
+        default:
+          aValue = a.symbol;
+          bValue = b.symbol;
+      }
+
+      if (aValue < bValue) return equitySortDirection === 'asc' ? -1 : 1;
+      if (aValue > bValue) return equitySortDirection === 'asc' ? 1 : -1;
+      return 0;
+    });
+    
+    setEquitySortedData(sorted);
+  }, [equityStatsData, equitySortField, equitySortDirection, safetyMargins]);
+
+  // Then apply pagination to the sorted data
+  const equityTotalPages = Math.ceil((equitySortedData?.length || 0) / equityItemsPerPage);
+  const equityStartIndex = (equityCurrentPage - 1) * equityItemsPerPage;
+  const equityEndIndex = equityStartIndex + equityItemsPerPage;
+  const equityPaginatedData = equitySortedData?.slice(equityStartIndex, equityEndIndex) || [];
+
+  // Effect to update F&O stocks count
+  useEffect(() => {
+    if (foStocksData) {
+      setFoStocksCount(foStocksData.count);
+    }
+  }, [foStocksData]);
 
   const handleOpenDialog = (record?: HistoricalData | HistoricalPriceCommodity) => {
     if (record) {
@@ -780,6 +929,33 @@ export default function HistoricalData() {
     });
   };
 
+  const handleBulkDownload = () => {
+    if (!bulkDownloadData.startDate || !bulkDownloadData.endDate) {
+      addMessage('error', 'Please select start and end dates');
+      return;
+    }
+    if (new Date(bulkDownloadData.startDate) >= new Date(bulkDownloadData.endDate)) {
+      addMessage('error', 'Start date must be before end date');
+      return;
+    }
+
+    bulkDownloadMutation.mutate({
+      startDate: bulkDownloadData.startDate,
+      endDate: bulkDownloadData.endDate,
+    });
+  };
+
+  // Equity table sorting handler
+  const handleEquitySort = (field: string) => {
+    if (equitySortField === field) {
+      setEquitySortDirection(equitySortDirection === 'asc' ? 'desc' : 'asc');
+    } else {
+      setEquitySortField(field);
+      setEquitySortDirection('asc');
+    }
+    setEquityCurrentPage(1); // Reset to first page when sorting
+  };
+
   const handleCsvFileChange = (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
     if (file) {
@@ -989,15 +1165,26 @@ export default function HistoricalData() {
         <h1 className="text-2xl font-bold text-gray-900">Historical Data Management</h1>
         <div className="flex space-x-3">
           {activeTab === 'equities' && (
-            <button
-              onClick={() => setShowEquityDownload(!showEquityDownload)}
-              className="inline-flex items-center px-4 py-2 border border-gray-300 text-sm font-medium rounded-md shadow-sm text-gray-700 bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-primary-500"
-            >
-              <svg className="h-4 w-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
-              </svg>
-              Download Equity Data
-            </button>
+            <>
+              <button
+                onClick={() => setShowEquityDownload(!showEquityDownload)}
+                className="inline-flex items-center px-4 py-2 border border-gray-300 text-sm font-medium rounded-md shadow-sm text-gray-700 bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-primary-500"
+              >
+                <svg className="h-4 w-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
+                </svg>
+                Download Equity Data
+              </button>
+              <button
+                onClick={() => setShowBulkDownload(!showBulkDownload)}
+                className="inline-flex items-center px-4 py-2 border border-gray-300 text-sm font-medium rounded-md shadow-sm text-gray-700 bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-green-500"
+              >
+                <svg className="h-4 w-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
+                </svg>
+                Bulk Download F&O Stocks
+              </button>
+            </>
           )}
           {activeTab === 'commodities' && (
             <button
@@ -1100,6 +1287,62 @@ export default function HistoricalData() {
                   </svg>
                 )}
                 {downloadEquityMutation.isPending ? 'Downloading...' : 'Download Data'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Bulk Download Form */}
+      {activeTab === 'equities' && showBulkDownload && (
+        <div className="mb-6 bg-white shadow rounded-lg p-6">
+          <h3 className="text-lg font-medium text-gray-900 mb-4">Bulk Download NSE F&O Stocks</h3>
+          <div className="mb-4 p-4 bg-blue-50 border border-blue-200 rounded-lg">
+            <div className="flex items-center">
+              <InformationCircleIcon className="h-5 w-5 text-blue-400 mr-2" />
+              <div>
+                <p className="text-sm text-blue-800">
+                  This will download historical data for all <strong>{foStocksCount}</strong> NSE F&O stocks.
+                </p>
+                <p className="text-xs text-blue-600 mt-1">
+                  This process may take several minutes to complete.
+                </p>
+              </div>
+            </div>
+          </div>
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">Start Date *</label>
+              <input
+                type="date"
+                value={bulkDownloadData.startDate}
+                onChange={(e) => setBulkDownloadData(prev => ({ ...prev, startDate: e.target.value }))}
+                className="block w-full border border-gray-300 rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-primary-500 focus:border-primary-500"
+              />
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">End Date *</label>
+              <input
+                type="date"
+                value={bulkDownloadData.endDate}
+                onChange={(e) => setBulkDownloadData(prev => ({ ...prev, endDate: e.target.value }))}
+                className="block w-full border border-gray-300 rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-primary-500 focus:border-primary-500"
+              />
+            </div>
+            <div className="flex items-end">
+              <button
+                onClick={handleBulkDownload}
+                disabled={bulkDownloadMutation.isPending}
+                className="w-full inline-flex justify-center items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md shadow-sm text-white bg-green-600 hover:bg-green-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-green-500 disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                {bulkDownloadMutation.isPending ? (
+                  <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white mr-2"></div>
+                ) : (
+                  <svg className="h-4 w-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
+                  </svg>
+                )}
+                {bulkDownloadMutation.isPending ? 'Bulk Downloading...' : 'Bulk Download All F&O Stocks'}
               </button>
             </div>
           </div>
@@ -1237,6 +1480,318 @@ export default function HistoricalData() {
         </div>
       )}
 
+      {/* F&O Equity Stocks Table */}
+      {activeTab === 'equities' && (
+        <div className="mb-6">
+          <div className="flex justify-between items-center mb-4">
+            <h3 className="text-lg font-medium text-gray-900">NSE F&O Equity Stocks</h3>
+            <div className="text-sm text-gray-500">
+              Showing {equityStatsData?.length || 0} of {foStocksCount} stocks
+            </div>
+          </div>
+
+          {/* Equity Table Pagination - Top */}
+          {equityTotalPages > 1 && (
+            <div className="bg-white px-4 py-3 flex items-center justify-between border-t border-gray-200 sm:px-6 mb-4">
+              <div className="flex-1 flex justify-between sm:hidden">
+                <button
+                  onClick={() => setEquityCurrentPage(Math.max(1, equityCurrentPage - 1))}
+                  disabled={equityCurrentPage === 1}
+                  className="relative inline-flex items-center px-4 py-2 border border-gray-300 text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  Previous
+                </button>
+                <button
+                  onClick={() => setEquityCurrentPage(Math.min(equityTotalPages, equityCurrentPage + 1))}
+                  disabled={equityCurrentPage === equityTotalPages}
+                  className="ml-3 relative inline-flex items-center px-4 py-2 border border-gray-300 text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  Next
+                </button>
+              </div>
+              <div className="hidden sm:flex-1 sm:flex sm:items-center sm:justify-between">
+                <div>
+                  <p className="text-sm text-gray-700">
+                    Showing{' '}
+                    <span className="font-medium">{equityStartIndex + 1}</span>
+                    {' '}to{' '}
+                    <span className="font-medium">
+                      {Math.min(equityEndIndex, equityStatsData?.length || 0)}
+                    </span>
+                    {' '}of{' '}
+                    <span className="font-medium">{equityStatsData?.length || 0}</span>
+                    {' '}results
+                  </p>
+                </div>
+                <div>
+                  <nav className="relative z-0 inline-flex rounded-md shadow-sm -space-x-px" aria-label="Pagination">
+                    <button
+                      onClick={() => setEquityCurrentPage(Math.max(1, equityCurrentPage - 1))}
+                      disabled={equityCurrentPage === 1}
+                      className="relative inline-flex items-center px-2 py-2 rounded-l-md border border-gray-300 bg-white text-sm font-medium text-gray-500 hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
+                    >
+                      <span className="sr-only">Previous</span>
+                      <ChevronLeftIcon className="h-5 w-5" aria-hidden="true" />
+                    </button>
+                    
+                    {/* Page numbers */}
+                    {Array.from({ length: Math.min(5, equityTotalPages) }, (_, i) => {
+                      let pageNum: number;
+                      if (equityTotalPages <= 5) {
+                        pageNum = i + 1;
+                      } else if (equityCurrentPage <= 3) {
+                        pageNum = i + 1;
+                      } else if (equityCurrentPage >= equityTotalPages - 2) {
+                        pageNum = equityTotalPages - 4 + i;
+                      } else {
+                        pageNum = equityCurrentPage - 2 + i;
+                      }
+                      
+                      return (
+                        <button
+                          key={pageNum}
+                          onClick={() => setEquityCurrentPage(pageNum)}
+                          className={`relative inline-flex items-center px-4 py-2 border text-sm font-medium ${
+                            equityCurrentPage === pageNum
+                              ? 'z-10 bg-primary-50 border-primary-500 text-primary-600'
+                              : 'bg-white border-gray-300 text-gray-500 hover:bg-gray-50'
+                          }`}
+                        >
+                          {pageNum}
+                        </button>
+                      );
+                    })}
+                    
+                    <button
+                      onClick={() => setEquityCurrentPage(Math.min(equityTotalPages, equityCurrentPage + 1))}
+                      disabled={equityCurrentPage === equityTotalPages}
+                      className="relative inline-flex items-center px-2 py-2 rounded-r-md border border-gray-300 bg-white text-sm font-medium text-gray-500 hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
+                    >
+                      <span className="sr-only">Next</span>
+                      <ChevronRightIcon className="h-5 w-5" aria-hidden="true" />
+                    </button>
+                  </nav>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* Equity Stocks Table */}
+          <div className="bg-white shadow overflow-hidden sm:rounded-md">
+            <div className="overflow-x-auto">
+              <table className="min-w-full divide-y divide-gray-200">
+                <thead className="bg-gray-50">
+                  <tr>
+                    <th 
+                      className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100"
+                      onClick={() => handleEquitySort('symbol')}
+                    >
+                      <div className="flex items-center space-x-1">
+                        <span>Symbol</span>
+                        {equitySortField === 'symbol' && (
+                          equitySortDirection === 'asc' ? 
+                            <ChevronUpIcon className="h-4 w-4" /> : 
+                            <ChevronDownIcon className="h-4 w-4" />
+                        )}
+                      </div>
+                    </th>
+                    <th 
+                      className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100"
+                      onClick={() => handleEquitySort('closingPrice')}
+                    >
+                      <div className="flex items-center space-x-1">
+                        <span>Previous Month Closing Price</span>
+                        {equitySortField === 'closingPrice' && (
+                          equitySortDirection === 'asc' ? 
+                            <ChevronUpIcon className="h-4 w-4" /> : 
+                            <ChevronDownIcon className="h-4 w-4" />
+                        )}
+                      </div>
+                    </th>
+                    <th 
+                      className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100"
+                      onClick={() => handleEquitySort('previousMonthReturn')}
+                    >
+                      <div className="flex items-center space-x-1">
+                        <span>Previous Month Return</span>
+                        {equitySortField === 'previousMonthReturn' && (
+                          equitySortDirection === 'asc' ? 
+                            <ChevronUpIcon className="h-4 w-4" /> : 
+                            <ChevronDownIcon className="h-4 w-4" />
+                        )}
+                      </div>
+                    </th>
+                    <th 
+                      className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100"
+                      onClick={() => handleEquitySort('safetyMargin')}
+                    >
+                      <div className="flex items-center space-x-1">
+                        <span>Safety Margin</span>
+                        {equitySortField === 'safetyMargin' && (
+                          equitySortDirection === 'asc' ? 
+                            <ChevronUpIcon className="h-4 w-4" /> : 
+                            <ChevronDownIcon className="h-4 w-4" />
+                        )}
+                      </div>
+                    </th>
+                    <th 
+                      className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100"
+                      onClick={() => handleEquitySort('safePE')}
+                    >
+                      <div className="flex items-center space-x-1">
+                        <span>Safe PE Price</span>
+                        {equitySortField === 'safePE' && (
+                          equitySortDirection === 'asc' ? 
+                            <ChevronUpIcon className="h-4 w-4" /> : 
+                            <ChevronDownIcon className="h-4 w-4" />
+                        )}
+                      </div>
+                    </th>
+                    <th 
+                      className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100"
+                      onClick={() => handleEquitySort('successRate')}
+                    >
+                      <div className="flex items-center space-x-1">
+                        <span>Current Month Success Rate</span>
+                        {equitySortField === 'successRate' && (
+                          equitySortDirection === 'asc' ? 
+                            <ChevronUpIcon className="h-4 w-4" /> : 
+                            <ChevronDownIcon className="h-4 w-4" />
+                        )}
+                      </div>
+                    </th>
+                    <th 
+                      className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100"
+                      onClick={() => handleEquitySort('topFalls')}
+                    >
+                      <div className="flex items-center space-x-1">
+                        <span>Top 3 Falls</span>
+                        {equitySortField === 'topFalls' && (
+                          equitySortDirection === 'asc' ? 
+                            <ChevronUpIcon className="h-4 w-4" /> : 
+                            <ChevronDownIcon className="h-4 w-4" />
+                        )}
+                      </div>
+                    </th>
+                  </tr>
+                </thead>
+                <tbody className="bg-white divide-y divide-gray-200">
+                  {equityPaginatedData?.map((stock) => (
+                    <tr key={stock.symbol} className="hover:bg-gray-50">
+                      <td className="px-6 py-4 whitespace-nowrap">
+                        <div className="flex items-center">
+                          <ChartBarIcon className="h-4 w-4 text-gray-400 mr-2" />
+                          <div className="text-sm font-medium text-gray-900">{stock.symbol}</div>
+                        </div>
+                      </td>
+                      <td className="px-6 py-4 whitespace-nowrap">
+                        <div className="text-sm text-gray-900">
+                          {stock.latestMonth ? (
+                            <>
+                              <div className="font-medium">₹{formatPrice(stock.latestMonth.closingPrice)}</div>
+                              <div className="text-xs text-gray-500">
+                                {formatMonthYear(stock.latestMonth.year, stock.latestMonth.month)}
+                              </div>
+                            </>
+                          ) : (
+                            <span className="text-gray-500">No data</span>
+                          )}
+                        </div>
+                      </td>
+                      <td className="px-6 py-4 whitespace-nowrap">
+                        <div className="text-sm">
+                          {stock.previousMonthReturn ? (
+                            <span className={`font-medium ${stock.previousMonthReturn.percentChange >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+                              {stock.previousMonthReturn.percentChange >= 0 ? '+' : ''}{stock.previousMonthReturn.percentChange.toFixed(2)}%
+                            </span>
+                          ) : (
+                            <span className="text-gray-500">No data</span>
+                          )}
+                        </div>
+                      </td>
+                      <td className="px-6 py-4 whitespace-nowrap">
+                        <span className={`text-sm font-medium ${
+                          getSafetyMarginForSymbol(stock.symbol) === 'NA' 
+                            ? 'text-gray-500' 
+                            : 'text-blue-700'
+                        }`}>
+                          {getSafetyMarginForSymbol(stock.symbol)}
+                        </span>
+                      </td>
+                      <td className="px-6 py-4 whitespace-nowrap">
+                        {stock.latestMonth ? (
+                          <span className={`text-sm font-medium ${
+                            (() => {
+                              const safetyMargin = safetyMargins?.find(
+                                (sm: SafetyMargin) => sm.symbol.toLowerCase() === stock.symbol.toLowerCase() && sm.type === 'equity'
+                              );
+                              return safetyMargin ? 'text-green-700' : 'text-gray-500';
+                            })()
+                          }`}>
+                            {(() => {
+                              const safetyMargin = safetyMargins?.find(
+                                (sm: SafetyMargin) => sm.symbol.toLowerCase() === stock.symbol.toLowerCase() && sm.type === 'equity'
+                              );
+                              if (safetyMargin) {
+                                const safePE = calculateSafePE(stock.latestMonth.closingPrice, safetyMargin.safetyMargin);
+                                return `₹${formatPrice(safePE)}`;
+                              }
+                              return 'NA';
+                            })()}
+                          </span>
+                        ) : (
+                          <span className="text-sm text-gray-500">No data</span>
+                        )}
+                      </td>
+                      <td className="px-6 py-4 whitespace-nowrap">
+                        {stock.latestMonth ? (
+                          <span className={`text-sm font-medium ${
+                            (() => {
+                              const nextMonth = getNextMonth(stock.latestMonth.year, stock.latestMonth.month);
+                              const successRate = getSuccessRateForMonth(stock.symbol, nextMonth.month);
+                              return successRate >= 60 ? 'text-green-700' : 
+                                     successRate >= 40 ? 'text-yellow-600' : 
+                                     'text-red-600';
+                            })()
+                          }`}>
+                            {(() => {
+                              const nextMonth = getNextMonth(stock.latestMonth.year, stock.latestMonth.month);
+                              return getSuccessRateForMonth(stock.symbol, nextMonth.month);
+                            })()}%
+                          </span>
+                        ) : (
+                          <span className="text-sm text-gray-500">No data</span>
+                        )}
+                      </td>
+                      <td className="px-6 py-4">
+                        <div className="text-sm">
+                          {stock.topFalls && stock.topFalls.length > 0 ? (
+                            <div className="space-y-1">
+                              {stock.topFalls.map((fall: any, index: number) => (
+                                <div key={index} className="flex justify-between items-center">
+                                  <span className="text-gray-600 text-xs">
+                                    {new Date(fall.year, fall.month - 1).toLocaleDateString('en-US', { month: 'short', year: '2-digit' })}
+                                  </span>
+                                  <span className="font-medium text-red-600 text-xs ml-2">
+                                    {fall.percentChange.toFixed(1)}%
+                                  </span>
+                                </div>
+                              ))}
+                            </div>
+                          ) : (
+                            <span className="text-gray-500 text-sm">No data</span>
+                          )}
+                        </div>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+
+        </div>
+      )}
 
       {/* Commodity Statistics Cards */}
       {activeTab === 'commodities' && commodityStats && (
@@ -1376,6 +1931,7 @@ export default function HistoricalData() {
         </div>
       )}
 
+
       {/* Seasonal Chart Section */}
       {activeTab === 'commodities' && (
         <div className="bg-white shadow rounded-lg mb-6">
@@ -1429,6 +1985,7 @@ export default function HistoricalData() {
           )}
         </div>
       )}
+
 
       {/* Price Chart for Last 5 Years */}
       {activeTab === 'commodities' && chartData && chartData.length > 0 && (

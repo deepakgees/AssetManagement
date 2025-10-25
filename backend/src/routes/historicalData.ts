@@ -1,7 +1,7 @@
 import express from 'express';
 import { PrismaClient } from '@prisma/client';
 import { downloadLast10YearsMCXGoldData, bulkUploadCommodityData } from '../services/mcxDataService';
-import { downloadEquityData, getPopularEquitySymbols } from '../services/equityDataService';
+import { downloadEquityData, bulkDownloadFOStocks, getNSEFOStocksList, getNSEFOStocksCount } from '../services/equityDataService';
 
 const router = express.Router();
 const prisma = new PrismaClient();
@@ -475,10 +475,10 @@ router.post('/download-equity', async (req, res) => {
   }
 });
 
-// Get popular equity symbols
+// Get NSE F&O equity symbols for dropdown
 router.get('/equity-symbols', async (req, res) => {
   try {
-    const symbols = getPopularEquitySymbols();
+    const symbols = getNSEFOStocksList();
     res.json(symbols);
   } catch (error) {
     console.error('Error fetching equity symbols:', error);
@@ -556,6 +556,262 @@ router.post('/commodities/bulk-upload', async (req, res) => {
     res.status(500).json({ 
       success: false,
       error: 'Failed to bulk upload commodity data',
+      message: error instanceof Error ? error.message : 'Unknown error occurred'
+    });
+  }
+});
+
+// Get NSE F&O stocks list
+router.get('/fo-stocks', async (req, res) => {
+  try {
+    const stocks = getNSEFOStocksList();
+    const count = getNSEFOStocksCount();
+    
+    res.json({
+      success: true,
+      data: {
+        stocks,
+        count
+      }
+    });
+  } catch (error) {
+    console.error('Error getting F&O stocks list:', error);
+    res.status(500).json({ 
+      success: false,
+      error: 'Failed to get F&O stocks list',
+      message: error instanceof Error ? error.message : 'Unknown error occurred'
+    });
+  }
+});
+
+// Bulk download equity data for all NSE F&O stocks
+router.post('/bulk-download-fo', async (req, res) => {
+  try {
+    const { startDate, endDate } = req.body;
+
+    if (!startDate || !endDate) {
+      return res.status(400).json({ 
+        success: false,
+        error: 'Start date and end date are required' 
+      });
+    }
+
+    console.log(`Starting bulk download for NSE F&O stocks from ${startDate} to ${endDate}...`);
+    
+    const result = await bulkDownloadFOStocks(new Date(startDate), new Date(endDate));
+    
+    res.json({
+      success: true,
+      message: `Bulk download completed! Total: ${result.total}, Success: ${result.success}, Failed: ${result.failed}`,
+      data: result
+    });
+  } catch (error) {
+    console.error('Error in bulk download:', error);
+    res.status(500).json({ 
+      success: false,
+      error: 'Failed to perform bulk download',
+      message: error instanceof Error ? error.message : 'Unknown error occurred'
+    });
+  }
+});
+
+// Get equity chart data
+router.get('/equity-chart-data', async (req, res) => {
+  try {
+    const { symbols } = req.query;
+    
+    if (!symbols) {
+      return res.status(400).json({ 
+        success: false,
+        error: 'Symbols parameter is required' 
+      });
+    }
+
+    const symbolList = (symbols as string).split(',');
+    
+    // For now, return mock data structure
+    // In production, this would fetch actual chart data from the database
+    const chartData = symbolList.map(symbol => ({
+      symbol,
+      data: [] // This would contain actual price data
+    }));
+    
+    res.json(chartData);
+  } catch (error) {
+    console.error('Error getting equity chart data:', error);
+    res.status(500).json({ 
+      success: false,
+      error: 'Failed to get equity chart data',
+      message: error instanceof Error ? error.message : 'Unknown error occurred'
+    });
+  }
+});
+
+// Get equity seasonal data
+router.get('/equity-seasonal-data/:symbol', async (req, res) => {
+  try {
+    const { symbol } = req.params;
+    
+    if (!symbol) {
+      return res.status(400).json({ 
+        success: false,
+        error: 'Symbol parameter is required' 
+      });
+    }
+
+    // For now, return mock data structure
+    // In production, this would fetch actual seasonal data from the database
+    const seasonalData = [];
+    
+    res.json(seasonalData);
+  } catch (error) {
+    console.error('Error getting equity seasonal data:', error);
+    res.status(500).json({ 
+      success: false,
+      error: 'Failed to get equity seasonal data',
+      message: error instanceof Error ? error.message : 'Unknown error occurred'
+    });
+  }
+});
+
+// Get equity statistics for selected stocks
+router.get('/equity-stats', async (req, res) => {
+  try {
+    const { symbols } = req.query;
+    
+    if (!symbols) {
+      return res.status(400).json({ 
+        success: false,
+        error: 'Symbols parameter is required' 
+      });
+    }
+
+    const symbolList = (symbols as string).split(',');
+    const stats = [];
+
+    for (const symbol of symbolList) {
+      try {
+        // Get latest price data for the symbol
+        const latestData = await prisma.historicalPriceEquity.findFirst({
+          where: { symbol },
+          orderBy: [
+            { year: 'desc' },
+            { month: 'desc' }
+          ],
+        });
+
+        // Get historical data for the last 5 years
+        const currentYear = new Date().getFullYear();
+        const fiveYearsAgo = currentYear - 5;
+
+        const historicalData = await prisma.historicalPriceEquity.findMany({
+          where: {
+            symbol,
+            year: {
+              gte: fiveYearsAgo
+            }
+          },
+          orderBy: [
+            { year: 'asc' },
+            { month: 'asc' }
+          ],
+        });
+
+        // Calculate top falls
+        const topFalls = [];
+        if (historicalData.length > 0) {
+          // Calculate monthly changes between consecutive months
+          const monthlyChanges = [];
+          
+          for (let i = 1; i < historicalData.length; i++) {
+            const prevRecord = historicalData[i - 1];
+            const currentRecord = historicalData[i];
+            
+            const percentChange = ((currentRecord.closingPrice - prevRecord.closingPrice) / prevRecord.closingPrice) * 100;
+            
+            monthlyChanges.push({
+              year: currentRecord.year,
+              month: currentRecord.month,
+              percentChange,
+              closingPrice: currentRecord.closingPrice
+            });
+          }
+
+          // Get top 3 falls
+          topFalls.push(...monthlyChanges
+            .filter(change => change.percentChange < 0)
+            .sort((a, b) => a.percentChange - b.percentChange)
+            .slice(0, 3)
+          );
+        }
+
+        // Get time range
+        const firstRecord = await prisma.historicalPriceEquity.findFirst({
+          where: { symbol },
+          orderBy: [
+            { year: 'asc' },
+            { month: 'asc' }
+          ],
+        });
+
+        const timeRange = firstRecord && latestData 
+          ? `${new Date(firstRecord.year, firstRecord.month - 1).toLocaleDateString('en-US', { month: 'short', year: 'numeric' })} - ${new Date(latestData.year, latestData.month - 1).toLocaleDateString('en-US', { month: 'short', year: 'numeric' })}`
+          : 'No data';
+
+        // Get latest month data
+        const latestMonth = latestData ? {
+          year: latestData.year,
+          month: latestData.month,
+          closingPrice: latestData.closingPrice
+        } : null;
+
+        // Calculate previous month return
+        let previousMonthReturn = null;
+        if (latestData && historicalData.length > 1) {
+          // Find the previous month's data
+          const previousMonthData = historicalData.find(record => 
+            (record.year === latestData.year && record.month === latestData.month - 1) ||
+            (record.year === latestData.year - 1 && latestData.month === 1 && record.month === 12)
+          );
+          
+          if (previousMonthData) {
+            const percentChange = ((latestData.closingPrice - previousMonthData.closingPrice) / previousMonthData.closingPrice) * 100;
+            previousMonthReturn = {
+              percentChange,
+              previousPrice: previousMonthData.closingPrice,
+              currentPrice: latestData.closingPrice
+            };
+          }
+        }
+
+        stats.push({
+          symbol,
+          totalRecords: historicalData.length,
+          topFalls,
+          timeRange,
+          latestMonth,
+          previousMonthReturn
+        });
+
+      } catch (symbolError) {
+        console.error(`Error processing symbol ${symbol}:`, symbolError);
+        // Add empty stats for failed symbols
+        stats.push({
+          symbol,
+          totalRecords: 0,
+          topFalls: [],
+          timeRange: 'No data',
+          latestMonth: null
+        });
+      }
+    }
+
+    res.json(stats);
+  } catch (error) {
+    console.error('Error getting equity stats:', error);
+    res.status(500).json({ 
+      success: false,
+      error: 'Failed to get equity stats',
       message: error instanceof Error ? error.message : 'Unknown error occurred'
     });
   }
