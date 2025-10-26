@@ -5,11 +5,11 @@ import {
   UserGroupIcon,
   ChartBarIcon,
   CurrencyDollarIcon,
-  Bars3Icon,
   XMarkIcon,
   TagIcon,
   ClockIcon,
-  ShieldCheckIcon,
+  ChevronDownIcon,
+  ChevronRightIcon,
 } from '@heroicons/react/24/outline';
 
 interface LayoutProps {
@@ -18,17 +18,122 @@ interface LayoutProps {
 
 const Layout: React.FC<LayoutProps> = ({ children }) => {
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [currentTradesOpen, setCurrentTradesOpen] = useState(true);
+  const [performanceOpen, setPerformanceOpen] = useState(true);
+  const [nextTradesOpen, setNextTradesOpen] = useState(true);
   const location = useLocation();
 
   const navigation = [
     { name: 'Accounts', href: '/accounts', icon: UserGroupIcon },
-    { name: 'Holdings', href: '/holdings', icon: HomeIcon },
-    { name: 'Positions', href: '/positions', icon: ChartBarIcon },
-    { name: 'P&L', href: '/pnl', icon: CurrencyDollarIcon },
-    { name: 'Dividends', href: '/dividends', icon: CurrencyDollarIcon },
-    { name: 'Symbol & Margins', href: '/symbolMargins', icon: TagIcon },
-    { name: 'Historical Data', href: '/historicalData', icon: ClockIcon },
+    { 
+      name: 'Current Trades', 
+      icon: ChartBarIcon,
+      children: [
+        { name: 'Holdings', href: '/holdings', icon: HomeIcon },
+        { name: 'Positions', href: '/positions', icon: ChartBarIcon },
+      ]
+    },
+    { 
+      name: 'Next Trades', 
+      icon: TagIcon,
+      children: [
+        { name: 'Symbol & Margins', href: '/symbolMargins', icon: TagIcon },
+        { name: 'Historical Data', href: '/historicalData', icon: ClockIcon },
+      ]
+    },
+    { 
+      name: 'Performance', 
+      icon: CurrencyDollarIcon,
+      children: [
+        { name: 'P&L', href: '/pnl', icon: CurrencyDollarIcon },
+        { name: 'Dividends', href: '/dividends', icon: CurrencyDollarIcon },
+      ]
+    },
   ];
+
+  const renderNavigationItem = (item: any, isMobile: boolean = false) => {
+    if (item.children) {
+      // Render collapsible section
+      const hasActiveChild = item.children.some((child: any) => location.pathname === child.href);
+      const isOpen = item.name === 'Current Trades' ? currentTradesOpen : 
+                     item.name === 'Performance' ? performanceOpen : nextTradesOpen;
+      const toggleOpen = item.name === 'Current Trades' ? setCurrentTradesOpen : 
+                         item.name === 'Performance' ? setPerformanceOpen : setNextTradesOpen;
+      
+      return (
+        <div key={item.name}>
+          <button
+            onClick={() => toggleOpen(!isOpen)}
+            className={`group flex w-full items-center px-2 py-2 text-sm font-medium rounded-md ${
+              hasActiveChild
+                ? 'bg-indigo-100 text-indigo-700'
+                : 'text-gray-600 hover:bg-gray-50 hover:text-gray-900'
+            }`}
+          >
+            <item.icon
+              className={`mr-3 h-6 w-6 flex-shrink-0 ${
+                hasActiveChild ? 'text-indigo-500' : 'text-gray-400 group-hover:text-gray-500'
+              }`}
+            />
+            {item.name}
+            {isOpen ? (
+              <ChevronDownIcon className="ml-auto h-4 w-4" />
+            ) : (
+              <ChevronRightIcon className="ml-auto h-4 w-4" />
+            )}
+          </button>
+          {isOpen && (
+            <div className="ml-4 space-y-1">
+              {item.children.map((child: any) => {
+                const isActive = location.pathname === child.href;
+                return (
+                  <Link
+                    key={child.name}
+                    to={child.href}
+                    className={`group flex items-center px-2 py-2 text-sm font-medium rounded-md ${
+                      isActive
+                        ? 'bg-indigo-100 text-indigo-700'
+                        : 'text-gray-600 hover:bg-gray-50 hover:text-gray-900'
+                    }`}
+                    onClick={() => isMobile && setSidebarOpen(false)}
+                  >
+                    <child.icon
+                      className={`mr-3 h-6 w-6 flex-shrink-0 ${
+                        isActive ? 'text-indigo-500' : 'text-gray-400 group-hover:text-gray-500'
+                      }`}
+                    />
+                    {child.name}
+                  </Link>
+                );
+              })}
+            </div>
+          )}
+        </div>
+      );
+    } else {
+      // Render regular navigation item
+      const isActive = location.pathname === item.href;
+      return (
+        <Link
+          key={item.name}
+          to={item.href}
+          className={`group flex items-center px-2 py-2 text-sm font-medium rounded-md ${
+            isActive
+              ? 'bg-indigo-100 text-indigo-700'
+              : 'text-gray-600 hover:bg-gray-50 hover:text-gray-900'
+          }`}
+          onClick={() => isMobile && setSidebarOpen(false)}
+        >
+          <item.icon
+            className={`mr-3 h-6 w-6 flex-shrink-0 ${
+              isActive ? 'text-indigo-500' : 'text-gray-400 group-hover:text-gray-500'
+            }`}
+          />
+          {item.name}
+        </Link>
+      );
+    }
+  };
 
   return (
     <div className="min-h-screen bg-gray-50">
@@ -46,28 +151,7 @@ const Layout: React.FC<LayoutProps> = ({ children }) => {
             </button>
           </div>
           <nav className="flex-1 space-y-1 px-2 py-4">
-            {navigation.map((item) => {
-              const isActive = location.pathname === item.href;
-              return (
-                <Link
-                  key={item.name}
-                  to={item.href}
-                  className={`group flex items-center px-2 py-2 text-sm font-medium rounded-md ${
-                    isActive
-                      ? 'bg-indigo-100 text-indigo-700'
-                      : 'text-gray-600 hover:bg-gray-50 hover:text-gray-900'
-                  }`}
-                  onClick={() => setSidebarOpen(false)}
-                >
-                  <item.icon
-                    className={`mr-3 h-6 w-6 flex-shrink-0 ${
-                      isActive ? 'text-indigo-500' : 'text-gray-400 group-hover:text-gray-500'
-                    }`}
-                  />
-                  {item.name}
-                </Link>
-              );
-            })}
+            {navigation.map((item) => renderNavigationItem(item, true))}
           </nav>
         </div>
       </div>
@@ -79,27 +163,7 @@ const Layout: React.FC<LayoutProps> = ({ children }) => {
             <h1 className="text-lg font-semibold text-gray-900">Asset Management</h1>
           </div>
           <nav className="flex-1 space-y-1 px-2 py-4">
-            {navigation.map((item) => {
-              const isActive = location.pathname === item.href;
-              return (
-                <Link
-                  key={item.name}
-                  to={item.href}
-                  className={`group flex items-center px-2 py-2 text-sm font-medium rounded-md ${
-                    isActive
-                      ? 'bg-indigo-100 text-indigo-700'
-                      : 'text-gray-600 hover:bg-gray-50 hover:text-gray-900'
-                  }`}
-                >
-                  <item.icon
-                    className={`mr-3 h-6 w-6 flex-shrink-0 ${
-                      isActive ? 'text-indigo-500' : 'text-gray-400 group-hover:text-gray-500'
-                    }`}
-                  />
-                  {item.name}
-                </Link>
-              );
-            })}
+            {navigation.map((item) => renderNavigationItem(item, false))}
           </nav>
         </div>
       </div>
