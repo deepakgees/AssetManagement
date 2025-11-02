@@ -231,7 +231,9 @@ export const getPreviousMonthCommodityData = async (symbol: string, year: number
       }
     });
 
-    return response.data.length > 0 ? response.data[0] : null;
+    // The backend returns { data: [...], totalCount: ... }
+    const dataArray = response.data?.data || response.data || [];
+    return dataArray.length > 0 ? dataArray[0] : null;
   } catch (error) {
     console.error('Error fetching previous month data:', error);
     return null;
@@ -331,6 +333,39 @@ export const getHistoricalPriceEquity = async (filters?: { symbol?: string; star
 
   const response = await axios.get(`${API_BASE_URL}/historicalData/equity?${params.toString()}`);
   return response.data;
+};
+
+export interface CreateEquityData {
+  symbol: string;
+  year: number;
+  month: number;
+  closingPrice: number;
+  percentChange?: number;
+}
+
+export interface UpdateEquityData {
+  symbol?: string;
+  year?: number;
+  month?: number;
+  closingPrice?: number;
+  percentChange?: number;
+}
+
+// Create new equity historical data record
+export const createEquityData = async (data: CreateEquityData): Promise<any> => {
+  const response = await axios.post(`${API_BASE_URL}/historicalData/equity`, data);
+  return response.data;
+};
+
+// Update equity historical data record
+export const updateEquityData = async (id: number, data: UpdateEquityData): Promise<any> => {
+  const response = await axios.put(`${API_BASE_URL}/historicalData/equity/${id}`, data);
+  return response.data;
+};
+
+// Delete equity historical data record
+export const deleteEquityData = async (id: number): Promise<void> => {
+  await axios.delete(`${API_BASE_URL}/historicalData/equity/${id}`);
 };
 
 // Bulk upload commodity historical data

@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback, useMemo } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { Dialog, Transition } from '@headlessui/react';
 import { Fragment } from 'react';
@@ -33,6 +33,9 @@ import {
   getPreviousMonthCommodityData,
   getEquitySymbols,
   getHistoricalPriceEquity,
+  createEquityData,
+  updateEquityData,
+  deleteEquityData,
   bulkUploadCommodityData,
   getNSEFOStocks,
   bulkDownloadFOStocks,
@@ -47,8 +50,10 @@ import {
   type HistoricalPriceCommodity,
   type CreateHistoricalDataData,
   type CreateCommodityData,
+  type CreateEquityData,
   type UpdateHistoricalDataData,
   type UpdateCommodityData,
+  type UpdateEquityData,
 } from '../services/historicalDataService';
 import { getSymbolMargins, updateSafetyMargin, type SymbolMargin } from '../services/symbolMarginsService';
 
@@ -70,6 +75,14 @@ interface HistoricalDataFormData {
 }
 
 interface CommodityFormData {
+  symbol: string;
+  year: string;
+  month: string;
+  closingPrice: string;
+  percentChange: string;
+}
+
+interface EquityFormData {
   symbol: string;
   year: string;
   month: string;
@@ -275,9 +288,17 @@ export default function HistoricalData() {
     closingPrice: '',
     percentChange: '',
   });
+  const [equityFormData, setEquityFormData] = useState<EquityFormData>({
+    symbol: '',
+    year: '',
+    month: '',
+    closingPrice: '',
+    percentChange: '',
+  });
   const [calculatedPercentChange, setCalculatedPercentChange] = useState<number | null>(null);
   const [previousMonthData, setPreviousMonthData] = useState<HistoricalPriceCommodity | null>(null);
   const [isCalculatingPercent, setIsCalculatingPercent] = useState(false);
+  const [hasCalculatedChange, setHasCalculatedChange] = useState(false);
 
   // Bulk download state
   const [bulkDownloadData, setBulkDownloadData] = useState({
@@ -309,6 +330,7 @@ export default function HistoricalData() {
   // Equity expandable rows state
   const [expandedEquityRows, setExpandedEquityRows] = useState<Set<string>>(new Set());
   const [equitySeasonalData, setEquitySeasonalData] = useState<Record<string, any[]>>({});
+  const [loadingSeasonalData, setLoadingSeasonalData] = useState<Set<string>>(new Set());
   
   // Chart legend state
   const [visibleCommodities, setVisibleCommodities] = useState<Set<string>>(new Set());
@@ -343,17 +365,7 @@ export default function HistoricalData() {
 
   const queryClient = useQueryClient();
 
-  // Effect to calculate percentage change when relevant fields change
-  useEffect(() => {
-    if (activeTab === 'commodities' && !editingRecord) {
-      // Only calculate for new records, not when editing
-      const timeoutId = setTimeout(() => {
-        calculatePercentChange();
-      }, 500); // Debounce the calculation
-
-      return () => clearTimeout(timeoutId);
-    }
-  }, [commodityFormData.symbol, commodityFormData.year, commodityFormData.month, commodityFormData.closingPrice, activeTab, editingRecord]);
+  // Removed automatic calculation - user must click "Calculate Change" button explicitly
 
 
 
@@ -593,6 +605,42 @@ export default function HistoricalData() {
     },
   });
 
+  // Equity mutations
+  const addEquityMutation = useMutation({
+    mutationFn: (newRecord: CreateEquityData) => createEquityData(newRecord),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['historicalPriceEquity'] });
+      handleCloseDialog();
+      addMessage('success', 'Equity historical data record created successfully!');
+    },
+    onError: (error: any) => {
+      addMessage('error', `Failed to create equity record: ${error.response?.data?.message || error.message}`);
+    },
+  });
+
+  const updateEquityMutation = useMutation({
+    mutationFn: ({ id, ...data }: { id: number } & UpdateEquityData) => updateEquityData(id, data),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['historicalPriceEquity'] });
+      handleCloseDialog();
+      addMessage('success', 'Equity historical data record updated successfully!');
+    },
+    onError: (error: any) => {
+      addMessage('error', `Failed to update equity record: ${error.response?.data?.message || error.message}`);
+    },
+  });
+
+  const deleteEquityMutation = useMutation({
+    mutationFn: deleteEquityData,
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['historicalPriceEquity'] });
+      addMessage('success', 'Equity historical data record deleted successfully!');
+    },
+    onError: (error: any) => {
+      addMessage('error', `Failed to delete equity record: ${error.response?.data?.message || error.message}`);
+    },
+  });
+
   // Safety margin update mutation
   const updateSafetyMarginMutation = useMutation({
     mutationFn: ({ id, safetyMargin }: { id: number; safetyMargin: number | null }) => {
@@ -649,7 +697,39 @@ export default function HistoricalData() {
     queryKey: ['equityStats', 'all'],
     queryFn: () => getEquityStats(foStocksData?.stocks || []),
     enabled: activeTab === 'equities' && foStocksData?.stocks && foStocksData.stocks.length > 0,
+    staleTime: 5 * 60 * 1000, // 5 minutes - prevent excessive refetching
+    refetchOnWindowFocus: false, // Prevent refetch when window regains focus
+    refetchOnMount: false, // Prevent refetch on component mount
+    refetchOnReconnect: false, // Prevent refetch when network reconnects (prevents loop when backend starts)
   });
+
+  // Helper function to get success rate for a specific month and equity
+  // Memoized to prevent unnecessary recalculations
+  // Must be defined before the sorting useEffect that uses it
+  const getEquitySuccessRateForMonth = useCallback((symbol: string, month: number): number => {
+    if (!equitySeasonalData || !equitySeasonalData[symbol]) {
+      return 0;
+    }
+    
+    const equityData = equitySeasonalData[symbol];
+    
+    // Filter by month and ensure percentChange is not null
+    const monthData = equityData.filter(item => 
+      item.month === month && 
+      item.percentChange !== null
+    );
+    
+    if (monthData.length === 0) {
+      return 0;
+    }
+    
+    // Count positive returns
+    const positiveCount = monthData.filter(item => 
+      item.percentChange !== null && item.percentChange > 0
+    ).length;
+    
+    return Math.round((positiveCount / monthData.length) * 100);
+  }, [equitySeasonalData]);
 
   // Debug logging
   useEffect(() => {
@@ -662,30 +742,8 @@ export default function HistoricalData() {
     }
   }, [equityStatsData, equityStatsLoading, equityStatsError, activeTab, equitySortedData, equityCurrentPage]);
 
-  // Preload seasonal data for all visible equity stocks to calculate success rates
-  useEffect(() => {
-    if (equityStatsData && equityStatsData.length > 0) {
-      const loadSeasonalDataForVisibleStocks = async () => {
-        const symbolsToLoad = equityStatsData.map(stock => stock.symbol);
-        
-        for (const symbol of symbolsToLoad) {
-          if (!equitySeasonalData[symbol]) {
-            try {
-              const seasonalData = await getEquitySeasonalData(symbol);
-              setEquitySeasonalData(prev => ({
-                ...prev,
-                [symbol]: seasonalData
-              }));
-            } catch (error) {
-              console.error(`Error preloading seasonal data for ${symbol}:`, error);
-            }
-          }
-        }
-      };
-      
-      loadSeasonalDataForVisibleStocks();
-    }
-  }, [equityStatsData, equitySeasonalData]);
+  // Removed preload effect to prevent excessive API calls
+  // Seasonal data will be loaded on-demand when rows are expanded
 
   // Equity table sorting effect
   useEffect(() => {
@@ -768,7 +826,7 @@ export default function HistoricalData() {
     });
     
     setEquitySortedData(sorted);
-  }, [equityStatsData, equitySortField, equitySortDirection, symbolMargins]);
+  }, [equityStatsData, equitySortField, equitySortDirection, symbolMargins, getEquitySuccessRateForMonth]);
 
   // Then apply pagination to the sorted data
   const equityTotalPages = Math.ceil((equitySortedData?.length || 0) / equityItemsPerPage);
@@ -791,7 +849,12 @@ export default function HistoricalData() {
     }
   }, [foStocksData]);
 
-  const handleOpenDialog = (record?: HistoricalData | HistoricalPriceCommodity) => {
+  const handleOpenDialog = (record?: HistoricalData | HistoricalPriceCommodity | any) => {
+    // Reset calculation state
+    setHasCalculatedChange(false);
+    setCalculatedPercentChange(null);
+    setPreviousMonthData(null);
+    
     if (record) {
       setEditingRecord(record);
       
@@ -804,8 +867,19 @@ export default function HistoricalData() {
           closingPrice: record.closingPrice.toString(),
           percentChange: record.percentChange?.toString() || '',
         });
+        // If editing, mark as calculated since we have the data
+        setHasCalculatedChange(true);
+      } else if (activeTab === 'equities' && 'year' in record) {
+        // Handle equity record (year/month structure)
+        setEquityFormData({
+          symbol: record.symbol,
+          year: record.year.toString(),
+          month: record.month.toString(),
+          closingPrice: record.closingPrice.toString(),
+          percentChange: record.percentChange?.toString() || '',
+        });
       } else if ('date' in record) {
-        // Handle daily equity record
+        // Handle old daily equity record format (should not be used anymore)
         setFormData({
           symbol: record.symbol,
           date: record.date.split('T')[0], // Format date for input
@@ -834,6 +908,13 @@ export default function HistoricalData() {
         closingPrice: '',
         percentChange: '',
       });
+      setEquityFormData({
+        symbol: '',
+        year: '',
+        month: '',
+        closingPrice: '',
+        percentChange: '',
+      });
     }
     setOpenDialog(true);
   };
@@ -841,6 +922,10 @@ export default function HistoricalData() {
   const handleCloseDialog = () => {
     setOpenDialog(false);
     setEditingRecord(null);
+    setHasCalculatedChange(false);
+    setCalculatedPercentChange(null);
+    setPreviousMonthData(null);
+    setIsCalculatingPercent(false);
     setFormData({
       symbol: '',
       date: '',
@@ -857,9 +942,13 @@ export default function HistoricalData() {
       closingPrice: '',
       percentChange: '',
     });
-    setCalculatedPercentChange(null);
-    setPreviousMonthData(null);
-    setIsCalculatingPercent(false);
+    setEquityFormData({
+      symbol: '',
+      year: '',
+      month: '',
+      closingPrice: '',
+      percentChange: '',
+    });
   };
 
   // Function to calculate percentage change based on previous month's data
@@ -867,6 +956,8 @@ export default function HistoricalData() {
     if (!commodityFormData.symbol || !commodityFormData.year || !commodityFormData.month || !commodityFormData.closingPrice) {
       setCalculatedPercentChange(null);
       setPreviousMonthData(null);
+      setHasCalculatedChange(false);
+      addMessage('error', 'Please fill in all required fields (Symbol, Year, Month, Closing Price)');
       return;
     }
 
@@ -877,12 +968,23 @@ export default function HistoricalData() {
     if (isNaN(year) || isNaN(month) || isNaN(currentPrice)) {
       setCalculatedPercentChange(null);
       setPreviousMonthData(null);
+      setHasCalculatedChange(false);
+      addMessage('error', 'Please enter valid numeric values for Year, Month, and Closing Price');
       return;
     }
 
     setIsCalculatingPercent(true);
     try {
+      console.log('Calculating percentage change for:', {
+        symbol: commodityFormData.symbol,
+        year,
+        month,
+        currentPrice
+      });
+      
       const prevData = await getPreviousMonthCommodityData(commodityFormData.symbol, year, month);
+      console.log('Previous month data:', prevData);
+      
       setPreviousMonthData(prevData);
 
       if (prevData) {
@@ -893,17 +995,24 @@ export default function HistoricalData() {
           ...prev,
           percentChange: percentChange.toFixed(2)
         }));
+        addMessage('success', `Percentage change calculated: ${percentChange > 0 ? '+' : ''}${percentChange.toFixed(2)}%`);
       } else {
         setCalculatedPercentChange(null);
         setCommodityFormData(prev => ({
           ...prev,
           percentChange: ''
         }));
+        addMessage('info', 'No previous month data found. You can manually enter the percentage change.');
       }
-    } catch (error) {
+      // Mark that calculation has been done
+      setHasCalculatedChange(true);
+    } catch (error: any) {
       console.error('Error calculating percentage change:', error);
       setCalculatedPercentChange(null);
       setPreviousMonthData(null);
+      setHasCalculatedChange(false);
+      const errorMessage = error?.response?.data?.error || error?.message || 'Failed to calculate percentage change';
+      addMessage('error', `Failed to calculate percentage change: ${errorMessage}`);
     } finally {
       setIsCalculatingPercent(false);
     }
@@ -961,64 +1070,61 @@ export default function HistoricalData() {
           ...submitData,
         });
       } else {
-        // Directly add the record
+        // Add the record after calculation
         addCommodityMutation.mutate(submitData);
       }
-    } else {
-      // Handle equities form submission (original logic)
-      if (!formData.symbol.trim()) {
+    } else if (activeTab === 'equities') {
+      // Handle equities form submission (year/month structure)
+      if (!equityFormData.symbol.trim()) {
         addMessage('error', 'Please fill in the symbol');
         return;
       }
 
-      if (!formData.date) {
-        addMessage('error', 'Please select a date');
+      if (!equityFormData.year || !equityFormData.month) {
+        addMessage('error', 'Please select year and month');
         return;
       }
 
-      const open = parseFloat(formData.open);
-      const high = parseFloat(formData.high);
-      const low = parseFloat(formData.low);
-      const close = parseFloat(formData.close);
+      const year = parseInt(equityFormData.year);
+      const month = parseInt(equityFormData.month);
+      const closingPrice = parseFloat(equityFormData.closingPrice);
+      const percentChange = equityFormData.percentChange ? parseFloat(equityFormData.percentChange) : undefined;
 
-      if (isNaN(open) || isNaN(high) || isNaN(low) || isNaN(close)) {
-        addMessage('error', 'Please enter valid numeric values for OHLC');
+      if (isNaN(year) || isNaN(month) || isNaN(closingPrice)) {
+        addMessage('error', 'Please enter valid numeric values');
         return;
       }
 
-      if (high < low) {
-        addMessage('error', 'High price cannot be less than low price');
+      if (year < 1900 || year > 2100) {
+        addMessage('error', 'Year must be between 1900 and 2100');
         return;
       }
 
-      if (open < 0 || high < 0 || low < 0 || close < 0) {
-        addMessage('error', 'Prices cannot be negative');
+      if (month < 1 || month > 12) {
+        addMessage('error', 'Month must be between 1 and 12');
         return;
       }
 
-      const volume = formData.volume ? parseInt(formData.volume) : undefined;
-      if (formData.volume && (isNaN(volume!) || volume! < 0)) {
-        addMessage('error', 'Volume must be a valid positive number');
+      if (closingPrice < 0) {
+        addMessage('error', 'Closing price cannot be negative');
         return;
       }
 
       const submitData = {
-        symbol: formData.symbol.trim(),
-        date: formData.date,
-        open,
-        high,
-        low,
-        close,
-        volume,
+        symbol: equityFormData.symbol.trim(),
+        year,
+        month,
+        closingPrice,
+        percentChange,
       };
 
       if (editingRecord) {
-        updateRecordMutation.mutate({
+        updateEquityMutation.mutate({
           id: editingRecord.id,
           ...submitData,
         });
       } else {
-        addRecordMutation.mutate(submitData);
+        addEquityMutation.mutate(submitData);
       }
     }
   };
@@ -1027,6 +1133,8 @@ export default function HistoricalData() {
     if (window.confirm('Are you sure you want to delete this historical data record?')) {
       if (activeTab === 'commodities') {
         deleteCommodityMutation.mutate(recordId);
+      } else if (activeTab === 'equities') {
+        deleteEquityMutation.mutate(recordId);
       } else {
         deleteRecordMutation.mutate(recordId);
       }
@@ -1070,9 +1178,10 @@ export default function HistoricalData() {
       // Collapse the row
       newExpandedRows.delete(symbol);
     } else {
-      // Expand the row - fetch seasonal data if not already loaded
+      // Expand the row - fetch seasonal data if not already loaded or currently loading
       newExpandedRows.add(symbol);
-      if (!equitySeasonalData[symbol]) {
+      if (!equitySeasonalData[symbol] && !loadingSeasonalData.has(symbol)) {
+        setLoadingSeasonalData(prev => new Set(prev).add(symbol));
         try {
           const seasonalData = await getEquitySeasonalData(symbol);
           setEquitySeasonalData(prev => ({
@@ -1082,6 +1191,12 @@ export default function HistoricalData() {
         } catch (error) {
           console.error(`Error fetching seasonal data for ${symbol}:`, error);
           addMessage('error', `Failed to load seasonal data for ${symbol}`);
+        } finally {
+          setLoadingSeasonalData(prev => {
+            const next = new Set(prev);
+            next.delete(symbol);
+            return next;
+          });
         }
       }
     }
@@ -1319,33 +1434,6 @@ export default function HistoricalData() {
     
     return Math.round((positiveCount / monthData.length) * 100);
   };
-
-  // Helper function to get success rate for a specific month and equity
-  const getEquitySuccessRateForMonth = (symbol: string, month: number): number => {
-    if (!equitySeasonalData || !equitySeasonalData[symbol]) {
-      return 0;
-    }
-    
-    const equityData = equitySeasonalData[symbol];
-    
-    // Filter by month and ensure percentChange is not null
-    const monthData = equityData.filter(item => 
-      item.month === month && 
-      item.percentChange !== null
-    );
-    
-    if (monthData.length === 0) {
-      return 0;
-    }
-    
-    // Count positive returns
-    const positiveCount = monthData.filter(item => 
-      item.percentChange !== null && item.percentChange > 0
-    ).length;
-    
-    return Math.round((positiveCount / monthData.length) * 100);
-  };
-
 
   if (isLoading) {
     return (
@@ -2356,6 +2444,296 @@ export default function HistoricalData() {
           </div>
         </div>
       )}
+
+      {/* Add/Edit Historical Data Dialog */}
+      <Transition.Root show={openDialog} as={Fragment}>
+        <Dialog as="div" className="relative z-50" onClose={handleCloseDialog}>
+          <Transition.Child
+            as={Fragment}
+            enter="ease-out duration-300"
+            enterFrom="opacity-0"
+            enterTo="opacity-100"
+            leave="ease-in duration-200"
+            leaveFrom="opacity-100"
+            leaveTo="opacity-0"
+          >
+            <div className="fixed inset-0 bg-gray-500 bg-opacity-75 transition-opacity" />
+          </Transition.Child>
+
+          <div className="fixed inset-0 z-10 overflow-y-auto">
+            <div className="flex min-h-full items-end justify-center p-4 text-center sm:items-center sm:p-0">
+              <Transition.Child
+                as={Fragment}
+                enter="ease-out duration-300"
+                enterFrom="opacity-0 translate-y-4 sm:translate-y-0 sm:scale-95"
+                enterTo="opacity-100 translate-y-0 sm:scale-100"
+                leave="ease-in duration-200"
+                leaveFrom="opacity-100 translate-y-0 sm:scale-100"
+                leaveTo="opacity-0 translate-y-4 sm:translate-y-0 sm:scale-95"
+              >
+                <Dialog.Panel className="relative transform overflow-hidden rounded-lg bg-white px-4 pb-4 pt-5 text-left shadow-xl transition-all sm:my-8 sm:w-full sm:max-w-lg sm:p-6">
+                  <div>
+                    <Dialog.Title as="h3" className="text-lg font-medium leading-6 text-gray-900 mb-4">
+                      {editingRecord ? `Edit ${activeTab === 'commodities' ? 'Commodity' : 'Equity'} Record` : `Add New ${activeTab === 'commodities' ? 'Commodity' : 'Equity'} Record`}
+                    </Dialog.Title>
+                    
+                    {activeTab === 'commodities' ? (
+                      <div className="space-y-4">
+                        <div>
+                          <label className="block text-sm font-medium text-gray-700">
+                            Symbol *
+                          </label>
+                          <input
+                            type="text"
+                            value={commodityFormData.symbol}
+                            onChange={(e) => {
+                              setCommodityFormData({ ...commodityFormData, symbol: e.target.value });
+                              if (hasCalculatedChange) {
+                                setHasCalculatedChange(false);
+                                setCalculatedPercentChange(null);
+                                setPreviousMonthData(null);
+                              }
+                            }}
+                            className="mt-1 block w-full border border-gray-300 rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-primary-500 focus:border-primary-500"
+                            placeholder="e.g., GOLD, SILVER"
+                            required
+                          />
+                        </div>
+                        <div className="grid grid-cols-2 gap-4">
+                          <div>
+                            <label className="block text-sm font-medium text-gray-700">
+                              Year *
+                            </label>
+                            <input
+                              type="number"
+                              min="1900"
+                              max="2100"
+                              value={commodityFormData.year}
+                              onChange={(e) => {
+                                setCommodityFormData({ ...commodityFormData, year: e.target.value });
+                                if (hasCalculatedChange) {
+                                  setHasCalculatedChange(false);
+                                  setCalculatedPercentChange(null);
+                                  setPreviousMonthData(null);
+                                }
+                              }}
+                              className="mt-1 block w-full border border-gray-300 rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-primary-500 focus:border-primary-500"
+                              placeholder="e.g., 2024"
+                              required
+                            />
+                          </div>
+                          <div>
+                            <label className="block text-sm font-medium text-gray-700">
+                              Month *
+                            </label>
+                            <select
+                              value={commodityFormData.month}
+                              onChange={(e) => {
+                                setCommodityFormData({ ...commodityFormData, month: e.target.value });
+                                if (hasCalculatedChange) {
+                                  setHasCalculatedChange(false);
+                                  setCalculatedPercentChange(null);
+                                  setPreviousMonthData(null);
+                                }
+                              }}
+                              className="mt-1 block w-full border border-gray-300 rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-primary-500 focus:border-primary-500"
+                              required
+                            >
+                              <option value="">Select Month</option>
+                              {[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12].map(month => (
+                                <option key={month} value={month}>
+                                  {new Date(2000, month - 1).toLocaleDateString('en-US', { month: 'long' })}
+                                </option>
+                              ))}
+                            </select>
+                          </div>
+                        </div>
+                        <div>
+                          <label className="block text-sm font-medium text-gray-700">
+                            Closing Price *
+                          </label>
+                          <input
+                            type="number"
+                            step="0.01"
+                            min="0"
+                            value={commodityFormData.closingPrice}
+                            onChange={(e) => {
+                              setCommodityFormData({ ...commodityFormData, closingPrice: e.target.value });
+                              // Reset calculation state when closing price changes
+                              if (hasCalculatedChange) {
+                                setHasCalculatedChange(false);
+                                setCalculatedPercentChange(null);
+                                setPreviousMonthData(null);
+                              }
+                            }}
+                            className="mt-1 block w-full border border-gray-300 rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-primary-500 focus:border-primary-500"
+                            placeholder="e.g., 26477.50"
+                            required
+                          />
+                        </div>
+                        {calculatedPercentChange !== null && previousMonthData && (
+                          <div className="p-3 bg-blue-50 border border-blue-200 rounded-md">
+                            <p className="text-sm text-blue-800">
+                              Previous month ({new Date(previousMonthData.year, previousMonthData.month - 1).toLocaleDateString('en-US', { month: 'short', year: 'numeric' })}): ₹{previousMonthData.closingPrice.toFixed(2)}
+                            </p>
+                            <p className="text-sm font-medium text-blue-900 mt-1">
+                              Calculated % Change: {calculatedPercentChange > 0 ? '+' : ''}{calculatedPercentChange.toFixed(2)}%
+                            </p>
+                          </div>
+                        )}
+                        {isCalculatingPercent && (
+                          <div className="text-sm text-gray-500">Calculating percentage change...</div>
+                        )}
+                        <div>
+                          <div className="flex items-end gap-3">
+                            <div className="flex-1">
+                              <label className="block text-sm font-medium text-gray-700">
+                                Percent Change (%)
+                              </label>
+                              <input
+                                type="number"
+                                step="0.01"
+                                value={commodityFormData.percentChange}
+                                onChange={(e) => setCommodityFormData({ ...commodityFormData, percentChange: e.target.value })}
+                                className="mt-1 block w-full border border-gray-300 rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-primary-500 focus:border-primary-500"
+                                placeholder="Auto-calculated if previous month exists"
+                                readOnly={hasCalculatedChange && calculatedPercentChange !== null}
+                              />
+                            </div>
+                            {!editingRecord && (
+                              <button
+                                type="button"
+                                onClick={calculatePercentChange}
+                                disabled={!commodityFormData.symbol || !commodityFormData.year || !commodityFormData.month || !commodityFormData.closingPrice || isCalculatingPercent}
+                                className="px-4 py-2 text-sm font-medium text-white bg-blue-600 border border-transparent rounded-md hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:opacity-50 disabled:cursor-not-allowed"
+                              >
+                                {isCalculatingPercent ? 'Calculating...' : 'Calculate Change'}
+                              </button>
+                            )}
+                          </div>
+                          <p className="mt-1 text-xs text-gray-500">
+                            {!editingRecord ? 'Click "Calculate Change" to auto-calculate from previous month\'s data' : 'Optional: Leave empty to auto-calculate from previous month\'s data'}
+                          </p>
+                        </div>
+                      </div>
+                    ) : activeTab === 'equities' ? (
+                      <div className="space-y-4">
+                        <div>
+                          <label className="block text-sm font-medium text-gray-700">
+                            Symbol *
+                          </label>
+                          <select
+                            value={equityFormData.symbol}
+                            onChange={(e) => setEquityFormData({ ...equityFormData, symbol: e.target.value })}
+                            className="mt-1 block w-full border border-gray-300 rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-primary-500 focus:border-primary-500"
+                            required
+                          >
+                            <option value="">Select Symbol</option>
+                            {equitySymbols?.map(symbol => (
+                              <option key={symbol} value={symbol}>{symbol}</option>
+                            ))}
+                          </select>
+                        </div>
+                        <div className="grid grid-cols-2 gap-4">
+                          <div>
+                            <label className="block text-sm font-medium text-gray-700">
+                              Year *
+                            </label>
+                            <input
+                              type="number"
+                              min="1900"
+                              max="2100"
+                              value={equityFormData.year}
+                              onChange={(e) => setEquityFormData({ ...equityFormData, year: e.target.value })}
+                              className="mt-1 block w-full border border-gray-300 rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-primary-500 focus:border-primary-500"
+                              placeholder="e.g., 2024"
+                              required
+                            />
+                          </div>
+                          <div>
+                            <label className="block text-sm font-medium text-gray-700">
+                              Month *
+                            </label>
+                            <select
+                              value={equityFormData.month}
+                              onChange={(e) => setEquityFormData({ ...equityFormData, month: e.target.value })}
+                              className="mt-1 block w-full border border-gray-300 rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-primary-500 focus:border-primary-500"
+                              required
+                            >
+                              <option value="">Select Month</option>
+                              {[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12].map(month => (
+                                <option key={month} value={month}>
+                                  {new Date(2000, month - 1).toLocaleDateString('en-US', { month: 'long' })}
+                                </option>
+                              ))}
+                            </select>
+                          </div>
+                        </div>
+                        <div>
+                          <label className="block text-sm font-medium text-gray-700">
+                            Closing Price *
+                          </label>
+                          <input
+                            type="number"
+                            step="0.01"
+                            min="0"
+                            value={equityFormData.closingPrice}
+                            onChange={(e) => setEquityFormData({ ...equityFormData, closingPrice: e.target.value })}
+                            className="mt-1 block w-full border border-gray-300 rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-primary-500 focus:border-primary-500"
+                            placeholder="e.g., 2647.75"
+                            required
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-sm font-medium text-gray-700">
+                            Percent Change (%)
+                          </label>
+                          <input
+                            type="number"
+                            step="0.01"
+                            value={equityFormData.percentChange}
+                            onChange={(e) => setEquityFormData({ ...equityFormData, percentChange: e.target.value })}
+                            className="mt-1 block w-full border border-gray-300 rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-primary-500 focus:border-primary-500"
+                            placeholder="Optional: e.g., -5.25"
+                          />
+                          <p className="mt-1 text-xs text-gray-500">
+                            Optional: Percentage change from previous month
+                          </p>
+                        </div>
+                      </div>
+                    ) : null}
+                  </div>
+                  <div className="mt-6 flex justify-end space-x-3">
+                    <button
+                      type="button"
+                      onClick={handleCloseDialog}
+                      className="px-4 py-2 border border-gray-300 rounded-md text-sm font-medium text-gray-700 bg-white hover:bg-gray-50"
+                    >
+                      Cancel
+                    </button>
+                    <button
+                      type="button"
+                      onClick={handleSubmit}
+                      disabled={
+                        (activeTab === 'commodities' && (
+                          addCommodityMutation.isPending || 
+                          updateCommodityMutation.isPending || 
+                          isCalculatingPercent ||
+                          (!editingRecord && !hasCalculatedChange)
+                        )) ||
+                        (activeTab === 'equities' && (addEquityMutation.isPending || updateEquityMutation.isPending))
+                      }
+                      className="px-4 py-2 border border-transparent rounded-md text-sm font-medium text-white bg-primary-600 hover:bg-primary-700 disabled:opacity-50 disabled:cursor-not-allowed"
+                    >
+                      {editingRecord ? 'Update Record' : 'Add Record'}
+                    </button>
+                  </div>
+                </Dialog.Panel>
+              </Transition.Child>
+            </div>
+          </div>
+        </Dialog>
+      </Transition.Root>
 
       {/* Safety Margin Edit Dialog */}
       {editingSafetyMargin && (

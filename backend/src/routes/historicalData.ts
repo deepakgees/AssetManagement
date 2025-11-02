@@ -523,6 +523,86 @@ router.get('/equity', async (req, res) => {
   }
 });
 
+// Add new equity historical data record
+router.post('/equity', async (req, res) => {
+  try {
+    const { symbol, year, month, closingPrice, percentChange } = req.body;
+
+    if (!symbol || !year || !month || closingPrice === undefined) {
+      return res.status(400).json({ error: 'Missing required fields: symbol, year, month, closingPrice' });
+    }
+
+    const equityData = await prisma.historicalPriceEquity.create({
+      data: {
+        symbol: symbol.toUpperCase(),
+        year: parseInt(year),
+        month: parseInt(month),
+        closingPrice: parseFloat(closingPrice),
+        percentChange: percentChange ? parseFloat(percentChange) : null,
+      },
+    });
+
+    res.status(201).json(equityData);
+  } catch (error: any) {
+    console.error('Error creating equity historical data:', error);
+    if (error.code === 'P2002') {
+      res.status(409).json({ error: 'Record already exists for this symbol, year, and month' });
+    } else {
+      res.status(500).json({ error: 'Failed to create equity historical data' });
+    }
+  }
+});
+
+// Update equity historical data record
+router.put('/equity/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { symbol, year, month, closingPrice, percentChange } = req.body;
+
+    const equityData = await prisma.historicalPriceEquity.update({
+      where: { id: parseInt(id) },
+      data: {
+        ...(symbol && { symbol: symbol.toUpperCase() }),
+        ...(year && { year: parseInt(year) }),
+        ...(month && { month: parseInt(month) }),
+        ...(closingPrice !== undefined && { closingPrice: parseFloat(closingPrice) }),
+        ...(percentChange !== undefined && { percentChange: percentChange ? parseFloat(percentChange) : null }),
+      },
+    });
+
+    res.json(equityData);
+  } catch (error: any) {
+    console.error('Error updating equity historical data:', error);
+    if (error.code === 'P2025') {
+      res.status(404).json({ error: 'Record not found' });
+    } else if (error.code === 'P2002') {
+      res.status(409).json({ error: 'Record already exists for this symbol, year, and month' });
+    } else {
+      res.status(500).json({ error: 'Failed to update equity historical data' });
+    }
+  }
+});
+
+// Delete equity historical data record
+router.delete('/equity/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    await prisma.historicalPriceEquity.delete({
+      where: { id: parseInt(id) },
+    });
+
+    res.status(204).send();
+  } catch (error: any) {
+    console.error('Error deleting equity historical data:', error);
+    if (error.code === 'P2025') {
+      res.status(404).json({ error: 'Record not found' });
+    } else {
+      res.status(500).json({ error: 'Failed to delete equity historical data' });
+    }
+  }
+});
+
 // Bulk upload commodity historical data
 router.post('/commodities/bulk-upload', async (req, res) => {
   try {
