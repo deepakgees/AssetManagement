@@ -15,6 +15,8 @@ import {
   ChevronRightIcon,
   ChevronUpIcon,
   ChevronDownIcon,
+  ChevronDownIcon as ChevronDown,
+  ChevronRightIcon as ChevronRight,
 } from '@heroicons/react/24/outline';
 import Layout from '../components/Layout';
 import { 
@@ -182,6 +184,76 @@ const SeasonalChartTable: React.FC<{ data: any[]; commodity: string }> = ({ data
   );
 };
 
+// Equity Seasonal Chart Table Component
+const EquitySeasonalTable: React.FC<{ data: any[]; symbol: string }> = ({ data, symbol }) => {
+  const { matrix, years, months } = processSeasonalData(data);
+  const successRates = calculateMonthlySuccessRates(data);
+
+  return (
+    <div className="overflow-x-auto">
+      <table className="min-w-full border border-gray-200 rounded-lg">
+        <thead>
+          <tr className="bg-gray-50">
+            <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider border-r border-gray-200">
+              {symbol}
+            </th>
+            {months.map((month, index) => (
+              <th key={index} className="px-2 py-2 text-center text-xs font-medium text-gray-500 uppercase tracking-wider border-r border-gray-200">
+                {month}
+              </th>
+            ))}
+          </tr>
+          <tr className="bg-blue-50">
+            <td className="px-3 py-2 text-xs font-medium text-gray-700 border-r border-gray-200">
+              Success Rate
+            </td>
+            {successRates.map((rate, index) => (
+              <td key={index} className={`px-2 py-2 text-center text-xs font-medium border-r border-gray-200 ${
+                rate >= 60 ? 'text-green-600 bg-green-50' : 
+                rate >= 40 ? 'text-yellow-600 bg-yellow-50' : 
+                'text-red-600 bg-red-50'
+              }`}>
+                {rate}%
+              </td>
+            ))}
+          </tr>
+        </thead>
+        <tbody className="bg-white divide-y divide-gray-200">
+          {years.map((year, yearIndex) => (
+            <tr key={year} className="hover:bg-gray-50">
+              <td className="px-3 py-2 text-sm font-medium text-gray-900 border-r border-gray-200 bg-blue-50">
+                {year}
+              </td>
+              {matrix[yearIndex].map((cell, monthIndex) => (
+                <td key={monthIndex} className={`px-2 py-2 text-center text-xs border-r border-gray-200 ${
+                  cell ? (
+                    cell.percentChange > 0 ? 'text-green-600 bg-green-50' : 
+                    cell.percentChange < 0 ? 'text-red-600 bg-red-50' : 
+                    'text-gray-600'
+                  ) : 'text-gray-400'
+                }`}>
+                  {cell ? (
+                    <div>
+                      <div className="font-medium">
+                        {cell.percentChange > 0 ? '+' : ''}{cell.percentChange?.toFixed(2)}%
+                      </div>
+                      <div className="text-xs text-gray-500">
+                        ₹{cell.closingPrice.toFixed(0)}
+                      </div>
+                    </div>
+                  ) : (
+                    '-'
+                  )}
+                </td>
+              ))}
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+};
+
 export default function HistoricalData() {
   const [activeTab, setActiveTab] = useState<'commodities' | 'equities'>('commodities');
   const [openDialog, setOpenDialog] = useState(false);
@@ -233,6 +305,10 @@ export default function HistoricalData() {
   const [equitySortDirection, setEquitySortDirection] = useState<'asc' | 'desc'>('asc');
   const [equitySortedData, setEquitySortedData] = useState<any[]>([]);
   const [isParsing, setIsParsing] = useState(false);
+  
+  // Equity expandable rows state
+  const [expandedEquityRows, setExpandedEquityRows] = useState<Set<string>>(new Set());
+  const [equitySeasonalData, setEquitySeasonalData] = useState<Record<string, any[]>>({});
   
   // Chart legend state
   const [visibleCommodities, setVisibleCommodities] = useState<Set<string>>(new Set());
@@ -393,8 +469,7 @@ export default function HistoricalData() {
   // Fetch symbol margins data (including safety margins)
   const { data: symbolMargins } = useQuery({
     queryKey: ['symbolMargins'],
-    queryFn: () => getSymbolMargins({ hasSafetyMargin: true }),
-    enabled: activeTab === 'commodities',
+    queryFn: () => getSymbolMargins(),
   });
 
   // Fetch seasonal data for selected commodity
@@ -587,6 +662,31 @@ export default function HistoricalData() {
     }
   }, [equityStatsData, equityStatsLoading, equityStatsError, activeTab, equitySortedData, equityCurrentPage]);
 
+  // Preload seasonal data for all visible equity stocks to calculate success rates
+  useEffect(() => {
+    if (equityStatsData && equityStatsData.length > 0) {
+      const loadSeasonalDataForVisibleStocks = async () => {
+        const symbolsToLoad = equityStatsData.map(stock => stock.symbol);
+        
+        for (const symbol of symbolsToLoad) {
+          if (!equitySeasonalData[symbol]) {
+            try {
+              const seasonalData = await getEquitySeasonalData(symbol);
+              setEquitySeasonalData(prev => ({
+                ...prev,
+                [symbol]: seasonalData
+              }));
+            } catch (error) {
+              console.error(`Error preloading seasonal data for ${symbol}:`, error);
+            }
+          }
+        }
+      };
+      
+      loadSeasonalDataForVisibleStocks();
+    }
+  }, [equityStatsData, equitySeasonalData]);
+
   // Equity table sorting effect
   useEffect(() => {
     if (!equityStatsData || equityStatsData.length === 0) {
@@ -629,8 +729,8 @@ export default function HistoricalData() {
           bValue = b.previousMonthReturn?.percentChange || 0;
           break;
         case 'safetyMargin':
-          aValue = getSafetyMarginForSymbol(a.symbol);
-          bValue = getSafetyMarginForSymbol(b.symbol);
+          aValue = getSafetyMarginForSymbol(a.symbol, 'equity');
+          bValue = getSafetyMarginForSymbol(b.symbol, 'equity');
           // Handle 'NA' values
           if (aValue === 'NA') aValue = -1;
           if (bValue === 'NA') bValue = -1;
@@ -650,8 +750,8 @@ export default function HistoricalData() {
         case 'successRate':
           const aNextMonth = a.latestMonth ? getNextMonth(a.latestMonth.year, a.latestMonth.month) : null;
           const bNextMonth = b.latestMonth ? getNextMonth(b.latestMonth.year, b.latestMonth.month) : null;
-          aValue = aNextMonth ? getSuccessRateForMonth(a.symbol, aNextMonth.month) : 0;
-          bValue = bNextMonth ? getSuccessRateForMonth(b.symbol, bNextMonth.month) : 0;
+          aValue = aNextMonth ? getEquitySuccessRateForMonth(a.symbol, aNextMonth.month) : 0;
+          bValue = bNextMonth ? getEquitySuccessRateForMonth(b.symbol, bNextMonth.month) : 0;
           break;
         case 'topFalls':
           aValue = a.topFalls && a.topFalls.length > 0 ? Math.min(...a.topFalls.map((fall: any) => fall.percentChange)) : 0;
@@ -962,6 +1062,33 @@ export default function HistoricalData() {
     setEquityCurrentPage(1); // Reset to first page when sorting
   };
 
+  // Handle equity row expansion
+  const handleEquityRowExpand = async (symbol: string) => {
+    const newExpandedRows = new Set(expandedEquityRows);
+    
+    if (newExpandedRows.has(symbol)) {
+      // Collapse the row
+      newExpandedRows.delete(symbol);
+    } else {
+      // Expand the row - fetch seasonal data if not already loaded
+      newExpandedRows.add(symbol);
+      if (!equitySeasonalData[symbol]) {
+        try {
+          const seasonalData = await getEquitySeasonalData(symbol);
+          setEquitySeasonalData(prev => ({
+            ...prev,
+            [symbol]: seasonalData
+          }));
+        } catch (error) {
+          console.error(`Error fetching seasonal data for ${symbol}:`, error);
+          addMessage('error', `Failed to load seasonal data for ${symbol}`);
+        }
+      }
+    }
+    
+    setExpandedEquityRows(newExpandedRows);
+  };
+
   const handleCsvFileChange = (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
     if (file) {
@@ -1137,12 +1264,12 @@ export default function HistoricalData() {
     return price.toFixed(2);
   };
 
-  // Helper function to get safety margin for a commodity symbol
-  const getSafetyMarginForSymbol = (symbol: string): string => {
+  // Helper function to get safety margin for a symbol (commodity or equity)
+  const getSafetyMarginForSymbol = (symbol: string, symbolType: 'commodity' | 'equity' = 'commodity'): string => {
     if (!symbolMargins) return 'NA';
     
     const symbolMargin = symbolMargins.find(
-      (sm: SymbolMargin) => sm.symbol.toLowerCase() === symbol.toLowerCase() && sm.symbolType === 'commodity'
+      (sm: SymbolMargin) => sm.symbol.toLowerCase() === symbol.toLowerCase() && sm.symbolType === symbolType
     );
     
     return symbolMargin?.safetyMargin ? `${symbolMargin.safetyMargin.toFixed(1)}%` : 'NA';
@@ -1177,6 +1304,32 @@ export default function HistoricalData() {
     
     // Filter by month and ensure percentChange is not null
     const monthData = commodityData.filter(item => 
+      item.month === month && 
+      item.percentChange !== null
+    );
+    
+    if (monthData.length === 0) {
+      return 0;
+    }
+    
+    // Count positive returns
+    const positiveCount = monthData.filter(item => 
+      item.percentChange !== null && item.percentChange > 0
+    ).length;
+    
+    return Math.round((positiveCount / monthData.length) * 100);
+  };
+
+  // Helper function to get success rate for a specific month and equity
+  const getEquitySuccessRateForMonth = (symbol: string, month: number): number => {
+    if (!equitySeasonalData || !equitySeasonalData[symbol]) {
+      return 0;
+    }
+    
+    const equityData = equitySeasonalData[symbol];
+    
+    // Filter by month and ensure percentChange is not null
+    const monthData = equityData.filter(item => 
       item.month === month && 
       item.percentChange !== null
     );
@@ -1559,6 +1712,9 @@ export default function HistoricalData() {
               <table className="min-w-full divide-y divide-gray-200">
                 <thead className="bg-gray-50">
                   <tr>
+                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                      <span className="sr-only">Expand</span>
+                    </th>
                     <th 
                       className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100"
                       onClick={() => handleEquitySort('symbol')}
@@ -1642,7 +1798,7 @@ export default function HistoricalData() {
                       onClick={() => handleEquitySort('topFalls')}
                     >
                       <div className="flex items-center space-x-1">
-                        <span>Top 3 Falls</span>
+                        <span>Top 5 Falls</span>
                         {equitySortField === 'topFalls' && (
                           equitySortDirection === 'asc' ? 
                             <ChevronUpIcon className="h-4 w-4" /> : 
@@ -1654,13 +1810,27 @@ export default function HistoricalData() {
                 </thead>
                 <tbody className="bg-white divide-y divide-gray-200">
                   {equityPaginatedData?.map((stock) => (
-                    <tr key={stock.symbol} className="hover:bg-gray-50">
-                      <td className="px-6 py-4 whitespace-nowrap">
-                        <div className="flex items-center">
-                          <ChartBarIcon className="h-4 w-4 text-gray-400 mr-2" />
-                          <div className="text-sm font-medium text-gray-900">{stock.symbol}</div>
-                        </div>
-                      </td>
+                    <>
+                      <tr key={stock.symbol} className="hover:bg-gray-50">
+                        <td className="px-6 py-4 whitespace-nowrap">
+                          <button
+                            onClick={() => handleEquityRowExpand(stock.symbol)}
+                            className="text-gray-400 hover:text-gray-600 transition-colors"
+                            title={expandedEquityRows.has(stock.symbol) ? "Collapse seasonal analysis" : "Expand seasonal analysis"}
+                          >
+                            {expandedEquityRows.has(stock.symbol) ? (
+                              <ChevronDown className="h-4 w-4" />
+                            ) : (
+                              <ChevronRight className="h-4 w-4" />
+                            )}
+                          </button>
+                        </td>
+                        <td className="px-6 py-4 whitespace-nowrap">
+                          <div className="flex items-center">
+                            <ChartBarIcon className="h-4 w-4 text-gray-400 mr-2" />
+                            <div className="text-sm font-medium text-gray-900">{stock.symbol}</div>
+                          </div>
+                        </td>
                       <td className="px-6 py-4 whitespace-nowrap">
                         <div className="text-sm text-gray-900">
                           {stock.latestMonth ? (
@@ -1689,11 +1859,11 @@ export default function HistoricalData() {
                       <td className="px-6 py-4 whitespace-nowrap">
                         <div className="flex items-center space-x-2">
                           <span className={`text-sm font-medium ${
-                            getSafetyMarginForSymbol(stock.symbol) === 'NA' 
+                            getSafetyMarginForSymbol(stock.symbol, 'equity') === 'NA' 
                               ? 'text-gray-500' 
                               : 'text-blue-700'
                           }`}>
-                            {getSafetyMarginForSymbol(stock.symbol)}
+                            {getSafetyMarginForSymbol(stock.symbol, 'equity')}
                           </span>
                           <button
                             onClick={() => {
@@ -1739,7 +1909,7 @@ export default function HistoricalData() {
                           <span className={`text-sm font-medium ${
                             (() => {
                               const nextMonth = getNextMonth(stock.latestMonth.year, stock.latestMonth.month);
-                              const successRate = getSuccessRateForMonth(stock.symbol, nextMonth.month);
+                              const successRate = getEquitySuccessRateForMonth(stock.symbol, nextMonth.month);
                               return successRate >= 60 ? 'text-green-700' : 
                                      successRate >= 40 ? 'text-yellow-600' : 
                                      'text-red-600';
@@ -1747,7 +1917,7 @@ export default function HistoricalData() {
                           }`}>
                             {(() => {
                               const nextMonth = getNextMonth(stock.latestMonth.year, stock.latestMonth.month);
-                              return getSuccessRateForMonth(stock.symbol, nextMonth.month);
+                              return getEquitySuccessRateForMonth(stock.symbol, nextMonth.month);
                             })()}%
                           </span>
                         ) : (
@@ -1757,17 +1927,39 @@ export default function HistoricalData() {
                       <td className="px-6 py-4">
                         <div className="text-sm">
                           {stock.topFalls && stock.topFalls.length > 0 ? (
-                            <div className="space-y-1">
-                              {stock.topFalls.map((fall: any, index: number) => (
-                                <div key={index} className="flex justify-between items-center">
-                                  <span className="text-gray-600 text-xs">
-                                    {new Date(fall.year, fall.month - 1).toLocaleDateString('en-US', { month: 'short', year: '2-digit' })}
-                                  </span>
-                                  <span className="font-medium text-red-600 text-xs ml-2">
-                                    {fall.percentChange.toFixed(1)}%
-                                  </span>
-                                </div>
-                              ))}
+                            <div className="grid grid-cols-2 gap-1 min-w-[200px]">
+                              {stock.topFalls.map((fall: any, index: number) => {
+                                // Get safety margin for this symbol
+                                const safetyMargin = symbolMargins?.find(
+                                  (sm: SymbolMargin) => sm.symbol.toLowerCase() === stock.symbol.toLowerCase() && sm.symbolType === 'equity'
+                                )?.safetyMargin;
+                                
+                                // Calculate absolute fall percentage (falls are negative, so we make them positive for comparison)
+                                const fallPercentage = Math.abs(fall.percentChange);
+                                
+                                // Determine color based on safety margin comparison
+                                const fallColor = safetyMargin && fallPercentage <= safetyMargin 
+                                  ? 'text-gray-900' // Black if fall is within safety margin
+                                  : 'text-red-600'; // Red if fall exceeds safety margin
+                                
+                                return (
+                                  <div key={index} className="flex justify-between items-center bg-gray-50 px-2 py-1 rounded text-xs">
+                                    <span className="text-gray-600">
+                                      {new Date(fall.year, fall.month - 1).toLocaleDateString('en-US', { month: 'short', year: '2-digit' })}
+                                    </span>
+                                    <span 
+                                      className={`font-medium ml-1 ${fallColor}`}
+                                      title={
+                                        safetyMargin 
+                                          ? `Fall: ${fallPercentage.toFixed(1)}%, Safety Margin: ${safetyMargin.toFixed(1)}% - ${fallPercentage <= safetyMargin ? 'Within safety margin' : 'Exceeds safety margin'}`
+                                          : `Fall: ${fallPercentage.toFixed(1)}% - No safety margin set`
+                                      }
+                                    >
+                                      {fall.percentChange.toFixed(1)}%
+                                    </span>
+                                  </div>
+                                );
+                              })}
                             </div>
                           ) : (
                             <span className="text-gray-500 text-sm">No data</span>
@@ -1775,6 +1967,29 @@ export default function HistoricalData() {
                         </div>
                       </td>
                     </tr>
+                    {/* Expandable seasonal analysis row */}
+                    {expandedEquityRows.has(stock.symbol) && (
+                      <tr>
+                        <td colSpan={7} className="px-6 py-4 bg-gray-50">
+                          <div className="border-t border-gray-200 pt-4">
+                            <h4 className="text-sm font-medium text-gray-900 mb-3">
+                              Seasonal Analysis - {stock.symbol}
+                            </h4>
+                            {equitySeasonalData[stock.symbol] && equitySeasonalData[stock.symbol].length > 0 ? (
+                              <EquitySeasonalTable 
+                                data={equitySeasonalData[stock.symbol]} 
+                                symbol={stock.symbol} 
+                              />
+                            ) : (
+                              <div className="text-center py-8 text-gray-500">
+                                <div className="text-sm">Loading seasonal data...</div>
+                              </div>
+                            )}
+                          </div>
+                        </td>
+                      </tr>
+                    )}
+                    </>
                   ))}
                 </tbody>
               </table>

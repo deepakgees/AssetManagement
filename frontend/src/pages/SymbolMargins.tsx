@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useMemo } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { Dialog, Transition } from '@headlessui/react';
 import { Fragment } from 'react';
@@ -10,6 +10,8 @@ import {
   CheckCircleIcon,
   ExclamationTriangleIcon,
   InformationCircleIcon,
+  ChevronUpIcon,
+  ChevronDownIcon,
 } from '@heroicons/react/24/outline';
 import Layout from '../components/Layout';
 import { 
@@ -49,6 +51,12 @@ export default function SymbolMargins() {
     safetyMargin: '',
     symbolType: 'equity',
   });
+  const [sortConfig, setSortConfig] = useState<{
+    key: keyof SymbolMargin | null;
+    direction: 'asc' | 'desc';
+  }>({ key: null, direction: 'asc' });
+  const [currentPage, setCurrentPage] = useState(1);
+  const itemsPerPage = 10;
 
   const queryClient = useQueryClient();
 
@@ -74,6 +82,16 @@ export default function SymbolMargins() {
     setMessages(prev => prev.filter(msg => msg.id !== messageId));
   };
 
+  // Sorting functions
+  const getSortIcon = (key: keyof SymbolMargin) => {
+    if (sortConfig.key !== key) {
+      return <ChevronUpIcon className="h-4 w-4 text-gray-400" />;
+    }
+    return sortConfig.direction === 'asc' 
+      ? <ChevronUpIcon className="h-4 w-4 text-gray-600" />
+      : <ChevronDownIcon className="h-4 w-4 text-gray-600" />;
+  };
+
   // Build query parameters for API call
   const queryParams: any = {};
 
@@ -89,6 +107,7 @@ export default function SymbolMargins() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['symbolMargins'] });
       handleCloseDialog();
+      setCurrentPage(1); // Reset to first page when new record is added
       addMessage('success', 'Symbol margin record created successfully!');
     },
     onError: (error: any) => {
@@ -112,6 +131,12 @@ export default function SymbolMargins() {
     mutationFn: deleteSymbolMargin,
     onSuccess: (data, variables, context) => {
       queryClient.invalidateQueries({ queryKey: ['symbolMargins'] });
+      // Reset to first page if current page becomes empty after deletion
+      const remainingRecords = (records?.length || 0) - 1;
+      const newTotalPages = Math.ceil(remainingRecords / itemsPerPage);
+      if (currentPage > newTotalPages && newTotalPages > 0) {
+        setCurrentPage(newTotalPages);
+      }
       // Check if it was an equity symbol by looking at the deleted record
       const deletedRecord = records?.find(r => r.id === variables);
       if (deletedRecord?.symbolType === 'equity') {
@@ -125,6 +150,53 @@ export default function SymbolMargins() {
     },
   });
 
+  // Get sorted records
+  const sortedRecords = useMemo(() => {
+    if (!records || !sortConfig.key) return records;
+
+    return [...records].sort((a, b) => {
+      let aValue = a[sortConfig.key!];
+      let bValue = b[sortConfig.key!];
+
+      // Handle null/undefined values
+      if (aValue == null && bValue == null) return 0;
+      if (aValue == null) return sortConfig.direction === 'asc' ? -1 : 1;
+      if (bValue == null) return sortConfig.direction === 'asc' ? 1 : -1;
+
+      // Handle string comparison
+      if (typeof aValue === 'string' && typeof bValue === 'string') {
+        return sortConfig.direction === 'asc' 
+          ? aValue.localeCompare(bValue)
+          : bValue.localeCompare(aValue);
+      }
+
+      // Handle number comparison
+      if (typeof aValue === 'number' && typeof bValue === 'number') {
+        return sortConfig.direction === 'asc' ? aValue - bValue : bValue - aValue;
+      }
+
+      return 0;
+    });
+  }, [records, sortConfig]);
+
+  // Pagination logic
+  const totalPages = Math.ceil((sortedRecords?.length || 0) / itemsPerPage);
+  const startIndex = (currentPage - 1) * itemsPerPage;
+  const endIndex = startIndex + itemsPerPage;
+  const paginatedRecords = sortedRecords?.slice(startIndex, endIndex) || [];
+
+  // Reset to first page when sorting changes
+  const handleSort = (key: keyof SymbolMargin) => {
+    setSortConfig(prevConfig => ({
+      key: key,
+      direction: prevConfig.key === key && prevConfig.direction === 'asc' ? 'desc' : 'asc'
+    }));
+    setCurrentPage(1); // Reset to first page when sorting
+  };
+
+  const handlePageChange = (page: number) => {
+    setCurrentPage(page);
+  };
 
   const handleOpenDialog = (record?: SymbolMargin) => {
     if (record) {
@@ -253,35 +325,150 @@ export default function SymbolMargins() {
 
       <div className="bg-white shadow rounded-lg">
         <div className="px-6 py-4 border-b border-gray-200">
-          <h2 className="text-lg font-medium text-gray-900">
-            Symbol & Margin Records ({records?.length || 0})
-          </h2>
-          <p className="text-sm text-gray-600 mt-1">
-            Manage symbol margins and safety margins for all trading instruments
-          </p>
+          <div className="flex justify-between items-center">
+            <div>
+              <h2 className="text-lg font-medium text-gray-900">
+                Symbol & Margin Records ({records?.length || 0})
+              </h2>
+              <p className="text-sm text-gray-600 mt-1">
+                Manage symbol margins and safety margins for all trading instruments
+              </p>
+            </div>
+            {/* Pagination Info */}
+            <div className="text-sm text-gray-600">
+              Showing {startIndex + 1}-{Math.min(endIndex, sortedRecords?.length || 0)} of {sortedRecords?.length || 0} records
+            </div>
+          </div>
+          
+          {/* Pagination Controls */}
+          {totalPages > 1 && (
+            <div className="mt-4 flex items-center justify-between">
+              <div className="flex items-center space-x-2">
+                <button
+                  onClick={() => handlePageChange(1)}
+                  disabled={currentPage === 1}
+                  className="px-3 py-1 text-sm border border-gray-300 rounded-md hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  First
+                </button>
+                <button
+                  onClick={() => handlePageChange(currentPage - 1)}
+                  disabled={currentPage === 1}
+                  className="px-3 py-1 text-sm border border-gray-300 rounded-md hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  Previous
+                </button>
+              </div>
+              
+              <div className="flex items-center space-x-1">
+                {Array.from({ length: totalPages }, (_, i) => i + 1).map((page) => {
+                  // Show first page, last page, current page, and pages around current page
+                  const shouldShow = 
+                    page === 1 || 
+                    page === totalPages || 
+                    (page >= currentPage - 1 && page <= currentPage + 1);
+                  
+                  if (!shouldShow) {
+                    // Show ellipsis for gaps
+                    if (page === currentPage - 2 || page === currentPage + 2) {
+                      return <span key={page} className="px-2 text-gray-500">...</span>;
+                    }
+                    return null;
+                  }
+                  
+                  return (
+                    <button
+                      key={page}
+                      onClick={() => handlePageChange(page)}
+                      className={`px-3 py-1 text-sm border rounded-md ${
+                        currentPage === page
+                          ? 'bg-primary-600 text-white border-primary-600'
+                          : 'border-gray-300 hover:bg-gray-50'
+                      }`}
+                    >
+                      {page}
+                    </button>
+                  );
+                })}
+              </div>
+              
+              <div className="flex items-center space-x-2">
+                <button
+                  onClick={() => handlePageChange(currentPage + 1)}
+                  disabled={currentPage === totalPages}
+                  className="px-3 py-1 text-sm border border-gray-300 rounded-md hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  Next
+                </button>
+                <button
+                  onClick={() => handlePageChange(totalPages)}
+                  disabled={currentPage === totalPages}
+                  className="px-3 py-1 text-sm border border-gray-300 rounded-md hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  Last
+                </button>
+              </div>
+            </div>
+          )}
         </div>
 
         <div className="overflow-x-auto">
           <table className="min-w-full divide-y divide-gray-200">
             <thead className="bg-gray-50">
               <tr>
-                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                  Symbol
+                <th 
+                  className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100"
+                  onClick={() => handleSort('symbol')}
+                >
+                  <div className="flex items-center">
+                    Symbol
+                    {getSortIcon('symbol')}
+                  </div>
                 </th>
-                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                  Margin
+                <th 
+                  className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100"
+                  onClick={() => handleSort('margin')}
+                >
+                  <div className="flex items-center">
+                    Margin
+                    {getSortIcon('margin')}
+                  </div>
                 </th>
-                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                  Safety Margin
+                <th 
+                  className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100"
+                  onClick={() => handleSort('safetyMargin')}
+                >
+                  <div className="flex items-center">
+                    Safety Margin
+                    {getSortIcon('safetyMargin')}
+                  </div>
                 </th>
-                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                  Type
+                <th 
+                  className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100"
+                  onClick={() => handleSort('symbolType')}
+                >
+                  <div className="flex items-center">
+                    Type
+                    {getSortIcon('symbolType')}
+                  </div>
                 </th>
-                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                  Created
+                <th 
+                  className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100"
+                  onClick={() => handleSort('createdAt')}
+                >
+                  <div className="flex items-center">
+                    Created
+                    {getSortIcon('createdAt')}
+                  </div>
                 </th>
-                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                  Updated
+                <th 
+                  className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100"
+                  onClick={() => handleSort('updatedAt')}
+                >
+                  <div className="flex items-center">
+                    Updated
+                    {getSortIcon('updatedAt')}
+                  </div>
                 </th>
                 <th className="px-6 py-3 text-center text-xs font-medium text-gray-500 uppercase tracking-wider">
                   Actions
@@ -289,7 +476,7 @@ export default function SymbolMargins() {
               </tr>
             </thead>
             <tbody className="bg-white divide-y divide-gray-200">
-              {records?.map((record) => (
+              {paginatedRecords?.map((record) => (
                 <tr key={record.id} className="hover:bg-gray-50">
                   <td className="px-6 py-4 whitespace-nowrap">
                     <div className="text-sm font-medium text-gray-900">{record.symbol}</div>
@@ -341,7 +528,7 @@ export default function SymbolMargins() {
           </table>
         </div>
 
-        {records?.length === 0 && (
+        {paginatedRecords?.length === 0 && sortedRecords?.length === 0 && (
           <div className="text-center py-12">
             <div className="text-gray-500 text-lg">No symbol margin records found</div>
             <div className="text-gray-400 text-sm mt-2">Click "Add Record" to create your first record</div>

@@ -659,10 +659,29 @@ router.get('/equity-seasonal-data/:symbol', async (req, res) => {
       });
     }
 
-    // For now, return mock data structure
-    // In production, this would fetch actual seasonal data from the database
-    const seasonalData = [];
+    const currentYear = new Date().getFullYear();
+    const tenYearsAgo = currentYear - 10;
     
+    // Get all records for the specified equity symbol in the last 10 years
+    const records = await prisma.historicalPriceEquity.findMany({
+      where: { 
+        symbol: symbol.toUpperCase(),
+        year: { gte: tenYearsAgo }
+      },
+      orderBy: [
+        { year: 'desc' },
+        { month: 'desc' }
+      ]
+    });
+
+    // Transform data for seasonal chart
+    const seasonalData = records.map(record => ({
+      year: record.year,
+      month: record.month,
+      closingPrice: record.closingPrice,
+      percentChange: record.percentChange
+    }));
+
     res.json(seasonalData);
   } catch (error) {
     console.error('Error getting equity seasonal data:', error);
@@ -737,11 +756,11 @@ router.get('/equity-stats', async (req, res) => {
             });
           }
 
-          // Get top 3 falls
+          // Get top 5 falls
           topFalls.push(...monthlyChanges
             .filter(change => change.percentChange < 0)
             .sort((a, b) => a.percentChange - b.percentChange)
-            .slice(0, 3)
+            .slice(0, 5)
           );
         }
 

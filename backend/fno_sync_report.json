@@ -1,0 +1,13 @@
+{
+  "timestamp": "2025-10-26T13:54:18.321Z",
+  "operations": {
+    "removed_non_fno": 25,
+    "added_missing_fno": 89,
+    "final_equity_count": 209,
+    "total_fno_symbols": 209
+  },
+  "discrepancies": {
+    "still_missing": [],
+    "still_non_fno": []
+  }
+}
