@@ -350,6 +350,20 @@ export default function HistoricalData() {
   const [equitySeasonalData, setEquitySeasonalData] = useState<Record<string, any[]>>({});
   const [loadingSeasonalData, setLoadingSeasonalData] = useState<Set<string>>(new Set());
   
+  // Commodity table pagination state
+  const [commodityCurrentPage, setCommodityCurrentPage] = useState(1);
+  const [commodityItemsPerPage] = useState(10);
+
+  // Commodity table sorting state
+  const [commoditySortField, setCommoditySortField] = useState<string>('symbol');
+  const [commoditySortDirection, setCommoditySortDirection] = useState<'asc' | 'desc'>('asc');
+  const [commoditySortedData, setCommoditySortedData] = useState<any[]>([]);
+
+  // Commodity expandable rows state
+  const [expandedCommodityRows, setExpandedCommodityRows] = useState<Set<string>>(new Set());
+  const [commoditySeasonalData, setCommoditySeasonalData] = useState<Record<string, any[]>>({});
+  const [loadingCommoditySeasonalData, setLoadingCommoditySeasonalData] = useState<Set<string>>(new Set());
+  
   // Chart legend state
   const [visibleCommodities, setVisibleCommodities] = useState<Set<string>>(new Set());
   
@@ -540,6 +554,31 @@ export default function HistoricalData() {
     hasNextPage: commoditiesResponse.hasNextPage,
     hasPreviousPage: commoditiesResponse.hasPreviousPage
   } : null;
+
+  // Fetch all commodity historical data for calculating previousMonthReturn
+  const { data: allCommoditiesHistoricalData } = useQuery({
+    queryKey: ['allCommoditiesHistoricalData'],
+    queryFn: async () => {
+      const symbols = commodityStats?.map(c => c.symbol) || [];
+      const allData: Record<string, HistoricalPriceCommodity[]> = {};
+      
+      for (const symbol of symbols) {
+        try {
+          const response = await getHistoricalPriceCommodities({ symbol });
+          allData[symbol] = response.data.sort((a, b) => {
+            if (a.year !== b.year) return a.year - b.year;
+            return a.month - b.month;
+          });
+        } catch (error) {
+          console.error(`Error fetching historical data for ${symbol}:`, error);
+          allData[symbol] = [];
+        }
+      }
+      
+      return allData;
+    },
+    enabled: activeTab === 'commodities' && commodityStats && commodityStats.length > 0,
+  });
 
   // Fetch equity symbols
   const { data: equitySymbols } = useQuery({
@@ -736,18 +775,54 @@ export default function HistoricalData() {
     refetchOnReconnect: false, // Prevent refetch when network reconnects (prevents loop when backend starts)
   });
 
+  // Preload seasonal data for all equities to calculate success rates
+  const { data: allEquitySeasonalData } = useQuery({
+    queryKey: ['allEquitySeasonalData', equityStatsData?.map(s => s.symbol).join(',')],
+    queryFn: async () => {
+      if (!equityStatsData || equityStatsData.length === 0) return {};
+      
+      const symbols = equityStatsData.map(s => s.symbol);
+      const allData: Record<string, any[]> = {};
+      
+      // Fetch seasonal data for all symbols in parallel (limit concurrency to avoid overwhelming the server)
+      const batchSize = 10;
+      for (let i = 0; i < symbols.length; i += batchSize) {
+        const batch = symbols.slice(i, i + batchSize);
+        await Promise.all(
+          batch.map(async (symbol) => {
+            try {
+              const data = await getEquitySeasonalData(symbol);
+              allData[symbol] = data;
+            } catch (error) {
+              console.error(`Error fetching seasonal data for ${symbol}:`, error);
+              allData[symbol] = [];
+            }
+          })
+        );
+      }
+      
+      return allData;
+    },
+    enabled: activeTab === 'equities' && equityStatsData && equityStatsData.length > 0,
+    staleTime: 5 * 60 * 1000, // 5 minutes
+    refetchOnWindowFocus: false,
+    refetchOnMount: false,
+    refetchOnReconnect: false,
+  });
+
   // Helper function to get success rate for a specific month and equity
   // Memoized to prevent unnecessary recalculations
   // Must be defined before the sorting useEffect that uses it
   const getEquitySuccessRateForMonth = useCallback((symbol: string, month: number): number => {
-    if (!equitySeasonalData || !equitySeasonalData[symbol]) {
+    // Use preloaded seasonal data if available, otherwise fall back to on-demand loaded data
+    const seasonalData = allEquitySeasonalData?.[symbol] || equitySeasonalData?.[symbol];
+    
+    if (!seasonalData || seasonalData.length === 0) {
       return 0;
     }
     
-    const equityData = equitySeasonalData[symbol];
-    
     // Filter by month and ensure percentChange is not null
-    const monthData = equityData.filter(item => 
+    const monthData = seasonalData.filter(item => 
       item.month === month && 
       item.percentChange !== null
     );
@@ -762,7 +837,7 @@ export default function HistoricalData() {
     ).length;
     
     return Math.round((positiveCount / monthData.length) * 100);
-  }, [equitySeasonalData]);
+  }, [allEquitySeasonalData, equitySeasonalData]);
 
   // Debug logging
   useEffect(() => {
@@ -859,7 +934,7 @@ export default function HistoricalData() {
     });
     
     setEquitySortedData(sorted);
-  }, [equityStatsData, equitySortField, equitySortDirection, symbolMargins, getEquitySuccessRateForMonth]);
+  }, [equityStatsData, equitySortField, equitySortDirection, symbolMargins, getEquitySuccessRateForMonth, allEquitySeasonalData]);
 
   // Then apply pagination to the sorted data
   const equityTotalPages = Math.ceil((equitySortedData?.length || 0) / equityItemsPerPage);
@@ -874,6 +949,137 @@ export default function HistoricalData() {
       console.log('Total pages:', equityTotalPages);
     }
   }, [activeTab, equityPaginatedData, equityTotalPages]);
+
+  // Helper function to get success rate for a specific month and commodity
+  const getCommoditySuccessRateForMonth = useCallback((symbol: string, month: number): number => {
+    if (!allSeasonalData || !allSeasonalData[symbol]) {
+      return 0;
+    }
+    
+    const commodityData = allSeasonalData[symbol];
+    
+    // Filter by month and ensure percentChange is not null
+    const monthData = commodityData.filter(item => 
+      item.month === month && 
+      item.percentChange !== null
+    );
+    
+    if (monthData.length === 0) {
+      return 0;
+    }
+    
+    // Count positive returns
+    const positiveCount = monthData.filter(item => 
+      item.percentChange !== null && item.percentChange > 0
+    ).length;
+    
+    return Math.round((positiveCount / monthData.length) * 100);
+  }, [allSeasonalData]);
+
+  // Commodity table sorting and previousMonthReturn calculation effect
+  useEffect(() => {
+    if (!commodityStats || commodityStats.length === 0 || !allCommoditiesHistoricalData) {
+      setCommoditySortedData([]);
+      return;
+    }
+
+    // Calculate previousMonthReturn for each commodity and enrich stats
+    const enrichedStats = commodityStats.map(commodity => {
+      let previousMonthReturn = null;
+      
+      if (commodity.latestMonth && allCommoditiesHistoricalData[commodity.symbol]) {
+        const historicalData = allCommoditiesHistoricalData[commodity.symbol];
+        const latestIndex = historicalData.findIndex(
+          record => record.year === commodity.latestMonth!.year && record.month === commodity.latestMonth!.month
+        );
+        
+        if (latestIndex > 0) {
+          const previousMonthData = historicalData[latestIndex - 1];
+          const percentChange = ((commodity.latestMonth.closingPrice - previousMonthData.closingPrice) / previousMonthData.closingPrice) * 100;
+          previousMonthReturn = {
+            percentChange,
+            previousPrice: previousMonthData.closingPrice,
+            currentPrice: commodity.latestMonth.closingPrice
+          };
+        }
+      }
+      
+      return {
+        ...commodity,
+        previousMonthReturn
+      };
+    });
+
+    // Deduplicate data by symbol (keep the first occurrence)
+    const deduplicatedData = enrichedStats.filter((item, index, self) => 
+      index === self.findIndex(t => t.symbol === item.symbol)
+    );
+
+    // Sort the data
+    const sorted = [...deduplicatedData].sort((a, b) => {
+      let aValue: any;
+      let bValue: any;
+
+      switch (commoditySortField) {
+        case 'symbol':
+          aValue = a.symbol;
+          bValue = b.symbol;
+          break;
+        case 'closingPrice':
+          aValue = a.latestMonth?.closingPrice || 0;
+          bValue = b.latestMonth?.closingPrice || 0;
+          break;
+        case 'previousMonthReturn':
+          aValue = a.previousMonthReturn?.percentChange || 0;
+          bValue = b.previousMonthReturn?.percentChange || 0;
+          break;
+        case 'safetyMargin':
+          aValue = getSafetyMarginForSymbol(a.symbol, 'commodity');
+          bValue = getSafetyMarginForSymbol(b.symbol, 'commodity');
+          // Handle 'NA' values
+          if (aValue === 'NA') aValue = -1;
+          if (bValue === 'NA') bValue = -1;
+          aValue = parseFloat(aValue.toString().replace('%', ''));
+          bValue = parseFloat(bValue.toString().replace('%', ''));
+          break;
+        case 'safePE':
+          const aSafetyMargin = symbolMargins?.find(
+            (sm: SymbolMargin) => sm.symbol.toLowerCase() === a.symbol.toLowerCase() && sm.symbolType === 'commodity'
+          );
+          const bSafetyMargin = symbolMargins?.find(
+            (sm: SymbolMargin) => sm.symbol.toLowerCase() === b.symbol.toLowerCase() && sm.symbolType === 'commodity'
+          );
+          aValue = aSafetyMargin && a.latestMonth && aSafetyMargin.safetyMargin ? calculateSafePE(a.latestMonth.closingPrice, aSafetyMargin.safetyMargin) : 0;
+          bValue = bSafetyMargin && b.latestMonth && bSafetyMargin.safetyMargin ? calculateSafePE(b.latestMonth.closingPrice, bSafetyMargin.safetyMargin) : 0;
+          break;
+        case 'successRate':
+          const aNextMonth = a.latestMonth ? getNextMonth(a.latestMonth.year, a.latestMonth.month) : null;
+          const bNextMonth = b.latestMonth ? getNextMonth(b.latestMonth.year, b.latestMonth.month) : null;
+          aValue = aNextMonth ? getCommoditySuccessRateForMonth(a.symbol, aNextMonth.month) : 0;
+          bValue = bNextMonth ? getCommoditySuccessRateForMonth(b.symbol, bNextMonth.month) : 0;
+          break;
+        case 'topFalls':
+          aValue = a.topFalls && a.topFalls.length > 0 ? Math.min(...a.topFalls.map((fall: any) => fall.percentChange)) : 0;
+          bValue = b.topFalls && b.topFalls.length > 0 ? Math.min(...b.topFalls.map((fall: any) => fall.percentChange)) : 0;
+          break;
+        default:
+          aValue = a.symbol;
+          bValue = b.symbol;
+      }
+
+      if (aValue < bValue) return commoditySortDirection === 'asc' ? -1 : 1;
+      if (aValue > bValue) return commoditySortDirection === 'asc' ? 1 : -1;
+      return 0;
+    });
+    
+    setCommoditySortedData(sorted);
+  }, [commodityStats, commoditySortField, commoditySortDirection, symbolMargins, allCommoditiesHistoricalData, getCommoditySuccessRateForMonth]);
+
+  // Then apply pagination to the sorted commodity data
+  const commodityTotalPages = Math.ceil((commoditySortedData?.length || 0) / commodityItemsPerPage);
+  const commodityStartIndex = (commodityCurrentPage - 1) * commodityItemsPerPage;
+  const commodityEndIndex = commodityStartIndex + commodityItemsPerPage;
+  const commodityPaginatedData = commoditySortedData?.slice(commodityStartIndex, commodityEndIndex) || [];
 
   // Effect to update F&O stocks count
   useEffect(() => {
@@ -1230,9 +1436,18 @@ export default function HistoricalData() {
       // Collapse the row
       newExpandedRows.delete(symbol);
     } else {
-      // Expand the row - fetch seasonal data if not already loaded or currently loading
+      // Expand the row - use preloaded data if available, otherwise fetch seasonal data
       newExpandedRows.add(symbol);
-      if (!equitySeasonalData[symbol] && !loadingSeasonalData.has(symbol)) {
+      
+      // Check if data is already in preloaded seasonal data
+      if (allEquitySeasonalData?.[symbol]) {
+        // Use preloaded data
+        setEquitySeasonalData(prev => ({
+          ...prev,
+          [symbol]: allEquitySeasonalData[symbol]
+        }));
+      } else if (!equitySeasonalData[symbol] && !loadingSeasonalData.has(symbol)) {
+        // Fetch seasonal data if not already loaded or currently loading
         setLoadingSeasonalData(prev => new Set(prev).add(symbol));
         try {
           const seasonalData = await getEquitySeasonalData(symbol);
@@ -1254,6 +1469,51 @@ export default function HistoricalData() {
     }
     
     setExpandedEquityRows(newExpandedRows);
+  };
+
+  // Commodity table sorting handler
+  const handleCommoditySort = (field: string) => {
+    if (commoditySortField === field) {
+      setCommoditySortDirection(commoditySortDirection === 'asc' ? 'desc' : 'asc');
+    } else {
+      setCommoditySortField(field);
+      setCommoditySortDirection('asc');
+    }
+    setCommodityCurrentPage(1); // Reset to first page when sorting
+  };
+
+  // Handle commodity row expansion
+  const handleCommodityRowExpand = async (symbol: string) => {
+    const newExpandedRows = new Set(expandedCommodityRows);
+    
+    if (newExpandedRows.has(symbol)) {
+      // Collapse the row
+      newExpandedRows.delete(symbol);
+    } else {
+      // Expand the row - fetch seasonal data if not already loaded or currently loading
+      newExpandedRows.add(symbol);
+      if (!commoditySeasonalData[symbol] && !loadingCommoditySeasonalData.has(symbol)) {
+        setLoadingCommoditySeasonalData(prev => new Set(prev).add(symbol));
+        try {
+          const seasonalData = await getCommoditySeasonalData(symbol);
+          setCommoditySeasonalData(prev => ({
+            ...prev,
+            [symbol]: seasonalData
+          }));
+        } catch (error) {
+          console.error(`Error fetching seasonal data for ${symbol}:`, error);
+          addMessage('error', `Failed to load seasonal data for ${symbol}`);
+        } finally {
+          setLoadingCommoditySeasonalData(prev => {
+            const next = new Set(prev);
+            next.delete(symbol);
+            return next;
+          });
+        }
+      }
+    }
+    
+    setExpandedCommodityRows(newExpandedRows);
   };
 
   const handleCsvFileChange = (event: React.ChangeEvent<HTMLInputElement>) => {
@@ -1400,8 +1660,9 @@ export default function HistoricalData() {
   const handleSaveSafetyMargin = () => {
     if (!editingSafetyMargin) return;
 
+    const symbolType = activeTab === 'commodities' ? 'commodity' : 'equity';
     const symbolMargin = symbolMargins?.find(
-      (sm: SymbolMargin) => sm.symbol.toLowerCase() === editingSafetyMargin.symbol.toLowerCase() && sm.symbolType === 'equity'
+      (sm: SymbolMargin) => sm.symbol.toLowerCase() === editingSafetyMargin.symbol.toLowerCase() && sm.symbolType === symbolType
     );
 
     if (!symbolMargin) {
@@ -2139,64 +2400,278 @@ export default function HistoricalData() {
         </div>
       )}
 
-      {/* Commodity Statistics Cards */}
-      {activeTab === 'commodities' && commodityStats && (
-        <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-3 mb-6">
-          {commodityStats.map((commodity) => (
-            <div key={commodity.symbol} className="bg-white overflow-hidden shadow rounded-lg">
-              <div className="p-3">
-                <div className="flex items-center justify-between mb-3">
-                  <div className="flex items-center">
-                    <div className="flex-shrink-0">
-                      <ChartBarIcon className="h-4 w-4 text-gray-400" />
-                    </div>
-                    <div className="ml-2">
-                      <h3 className="text-sm font-medium text-gray-900">{commodity.symbol}</h3>
-                      <p className="text-xs text-gray-500">{commodity.timeRange}</p>
-                    </div>
+      {/* Commodities Table */}
+      {activeTab === 'commodities' && (
+        <div className="mb-6">
+          <div className="flex justify-between items-center mb-4">
+            <h3 className="text-lg font-medium text-gray-900">Commodities</h3>
+            <div className="text-sm text-gray-500">
+              Showing {commodityStats?.length || 0} commodities
                   </div>
                 </div>
                 
-                <div className="grid grid-cols-1 gap-2">
-                  {/* Previous Month Closing Price */}
-                  {commodity.latestMonth && (
+          {/* Commodity Table Pagination - Top */}
+          {commodityTotalPages > 1 && (
+            <div className="bg-white px-4 py-3 flex items-center justify-between border-t border-gray-200 sm:px-6 mb-4">
+              <div className="flex-1 flex justify-between sm:hidden">
+                <button
+                  onClick={() => setCommodityCurrentPage(Math.max(1, commodityCurrentPage - 1))}
+                  disabled={commodityCurrentPage === 1}
+                  className="relative inline-flex items-center px-4 py-2 border border-gray-300 text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  Previous
+                </button>
+                <button
+                  onClick={() => setCommodityCurrentPage(Math.min(commodityTotalPages, commodityCurrentPage + 1))}
+                  disabled={commodityCurrentPage === commodityTotalPages}
+                  className="ml-3 relative inline-flex items-center px-4 py-2 border border-gray-300 text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  Next
+                </button>
+              </div>
+              <div className="hidden sm:flex-1 sm:flex sm:items-center sm:justify-between">
                     <div>
-                      <div className="flex justify-between items-center text-xs">
-                        <span className="text-gray-600">
-                          {formatMonthYear(commodity.latestMonth.year, commodity.latestMonth.month)} Price
+                  <p className="text-sm text-gray-700">
+                    Showing{' '}
+                    <span className="font-medium">{commodityStartIndex + 1}</span>
+                    {' '}to{' '}
+                    <span className="font-medium">
+                      {Math.min(commodityEndIndex, commodityStats?.length || 0)}
                         </span>
-                        <span className="font-medium text-gray-900">
-                          ₹{formatPrice(commodity.latestMonth.closingPrice)}
-                        </span>
+                    {' '}of{' '}
+                    <span className="font-medium">{commodityStats?.length || 0}</span>
+                    {' '}results
+                  </p>
+                </div>
+                <div>
+                  <nav className="relative z-0 inline-flex rounded-md shadow-sm -space-x-px" aria-label="Pagination">
+                    <button
+                      onClick={() => setCommodityCurrentPage(Math.max(1, commodityCurrentPage - 1))}
+                      disabled={commodityCurrentPage === 1}
+                      className="relative inline-flex items-center px-2 py-2 rounded-l-md border border-gray-300 bg-white text-sm font-medium text-gray-500 hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
+                    >
+                      <span className="sr-only">Previous</span>
+                      <ChevronLeftIcon className="h-5 w-5" aria-hidden="true" />
+                    </button>
+                    
+                    {/* Page numbers */}
+                    {Array.from({ length: Math.min(5, commodityTotalPages) }, (_, i) => {
+                      let pageNum: number;
+                      if (commodityTotalPages <= 5) {
+                        pageNum = i + 1;
+                      } else if (commodityCurrentPage <= 3) {
+                        pageNum = i + 1;
+                      } else if (commodityCurrentPage >= commodityTotalPages - 2) {
+                        pageNum = commodityTotalPages - 4 + i;
+                      } else {
+                        pageNum = commodityCurrentPage - 2 + i;
+                      }
+                      
+                      return (
+                        <button
+                          key={pageNum}
+                          onClick={() => setCommodityCurrentPage(pageNum)}
+                          className={`relative inline-flex items-center px-4 py-2 border text-sm font-medium ${
+                            commodityCurrentPage === pageNum
+                              ? 'z-10 bg-primary-50 border-primary-500 text-primary-600'
+                              : 'bg-white border-gray-300 text-gray-500 hover:bg-gray-50'
+                          }`}
+                        >
+                          {pageNum}
+                        </button>
+                      );
+                    })}
+                    
+                    <button
+                      onClick={() => setCommodityCurrentPage(Math.min(commodityTotalPages, commodityCurrentPage + 1))}
+                      disabled={commodityCurrentPage === commodityTotalPages}
+                      className="relative inline-flex items-center px-2 py-2 rounded-r-md border border-gray-300 bg-white text-sm font-medium text-gray-500 hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
+                    >
+                      <span className="sr-only">Next</span>
+                      <ChevronRightIcon className="h-5 w-5" aria-hidden="true" />
+                    </button>
+                  </nav>
+                </div>
                       </div>
                     </div>
                   )}
                   
-                  {/* Safety Margin */}
-                  <div>
-                    <div className="flex justify-between items-center text-xs">
-                      <span className="text-blue-600 font-medium">Safety Margin</span>
-                      <span className={`font-medium ${
-                        getSafetyMarginForSymbol(commodity.symbol) === 'NA' 
+          {/* Commodities Table */}
+          <div className="bg-white shadow overflow-hidden sm:rounded-md">
+            <div className="overflow-x-auto">
+              <table className="min-w-full divide-y divide-gray-200">
+                <thead className="bg-gray-50">
+                  <tr>
+                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                      <span className="sr-only">Expand</span>
+                    </th>
+                    <th 
+                      className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100"
+                      onClick={() => handleCommoditySort('symbol')}
+                    >
+                      <div className="flex items-center space-x-1">
+                        <span>Symbol</span>
+                        {commoditySortField === 'symbol' && (
+                          commoditySortDirection === 'asc' ? 
+                            <ChevronUpIcon className="h-4 w-4" /> : 
+                            <ChevronDownIcon className="h-4 w-4" />
+                        )}
+                      </div>
+                    </th>
+                    <th 
+                      className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100"
+                      onClick={() => handleCommoditySort('closingPrice')}
+                    >
+                      <div className="flex items-center space-x-1">
+                        <span>Previous Month Closing Price</span>
+                        {commoditySortField === 'closingPrice' && (
+                          commoditySortDirection === 'asc' ? 
+                            <ChevronUpIcon className="h-4 w-4" /> : 
+                            <ChevronDownIcon className="h-4 w-4" />
+                        )}
+                      </div>
+                    </th>
+                    <th 
+                      className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100"
+                      onClick={() => handleCommoditySort('previousMonthReturn')}
+                    >
+                      <div className="flex items-center space-x-1">
+                        <span>Previous Month Return</span>
+                        {commoditySortField === 'previousMonthReturn' && (
+                          commoditySortDirection === 'asc' ? 
+                            <ChevronUpIcon className="h-4 w-4" /> : 
+                            <ChevronDownIcon className="h-4 w-4" />
+                        )}
+                      </div>
+                    </th>
+                    <th 
+                      className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100"
+                      onClick={() => handleCommoditySort('safetyMargin')}
+                    >
+                      <div className="flex items-center space-x-1">
+                        <span>Safety Margin</span>
+                        {commoditySortField === 'safetyMargin' && (
+                          commoditySortDirection === 'asc' ? 
+                            <ChevronUpIcon className="h-4 w-4" /> : 
+                            <ChevronDownIcon className="h-4 w-4" />
+                        )}
+                      </div>
+                    </th>
+                    <th 
+                      className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100"
+                      onClick={() => handleCommoditySort('safePE')}
+                    >
+                      <div className="flex items-center space-x-1">
+                        <span>Safe PE Price</span>
+                        {commoditySortField === 'safePE' && (
+                          commoditySortDirection === 'asc' ? 
+                            <ChevronUpIcon className="h-4 w-4" /> : 
+                            <ChevronDownIcon className="h-4 w-4" />
+                        )}
+                      </div>
+                    </th>
+                    <th 
+                      className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100"
+                      onClick={() => handleCommoditySort('successRate')}
+                    >
+                      <div className="flex items-center space-x-1">
+                        <span>Current Month Success Rate</span>
+                        {commoditySortField === 'successRate' && (
+                          commoditySortDirection === 'asc' ? 
+                            <ChevronUpIcon className="h-4 w-4" /> : 
+                            <ChevronDownIcon className="h-4 w-4" />
+                        )}
+                      </div>
+                    </th>
+                    <th 
+                      className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100"
+                      onClick={() => handleCommoditySort('topFalls')}
+                    >
+                      <div className="flex items-center space-x-1">
+                        <span>Top 5 Falls</span>
+                        {commoditySortField === 'topFalls' && (
+                          commoditySortDirection === 'asc' ? 
+                            <ChevronUpIcon className="h-4 w-4" /> : 
+                            <ChevronDownIcon className="h-4 w-4" />
+                        )}
+                      </div>
+                    </th>
+                  </tr>
+                </thead>
+                <tbody className="bg-white divide-y divide-gray-200">
+                  {commodityPaginatedData?.map((commodity) => (
+                    <>
+                      <tr key={commodity.symbol} className="hover:bg-gray-50">
+                        <td className="px-6 py-4 whitespace-nowrap">
+                          <button
+                            onClick={() => handleCommodityRowExpand(commodity.symbol)}
+                            className="text-gray-400 hover:text-gray-600 transition-colors"
+                            title={expandedCommodityRows.has(commodity.symbol) ? "Collapse seasonal analysis" : "Expand seasonal analysis"}
+                          >
+                            {expandedCommodityRows.has(commodity.symbol) ? (
+                              <ChevronDown className="h-4 w-4" />
+                            ) : (
+                              <ChevronRight className="h-4 w-4" />
+                            )}
+                          </button>
+                        </td>
+                        <td className="px-6 py-4 whitespace-nowrap">
+                          <div className="flex items-center">
+                            <ChartBarIcon className="h-4 w-4 text-gray-400 mr-2" />
+                            <div className="text-sm font-medium text-gray-900">{commodity.symbol}</div>
+                          </div>
+                        </td>
+                        <td className="px-6 py-4 whitespace-nowrap">
+                          <div className="text-sm text-gray-900">
+                            {commodity.latestMonth ? (
+                              <>
+                                <div className="font-medium">₹{formatPrice(commodity.latestMonth.closingPrice)}</div>
+                                <div className="text-xs text-gray-500">
+                                  {formatMonthYear(commodity.latestMonth.year, commodity.latestMonth.month)}
+                                </div>
+                              </>
+                            ) : (
+                              <span className="text-gray-500">No data</span>
+                            )}
+                          </div>
+                        </td>
+                        <td className="px-6 py-4 whitespace-nowrap">
+                          <div className="text-sm">
+                            {commodity.previousMonthReturn ? (
+                              <span className={`font-medium ${commodity.previousMonthReturn.percentChange >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+                                {commodity.previousMonthReturn.percentChange >= 0 ? '+' : ''}{commodity.previousMonthReturn.percentChange.toFixed(2)}%
+                              </span>
+                            ) : (
+                              <span className="text-gray-500">No data</span>
+                            )}
+                          </div>
+                        </td>
+                        <td className="px-6 py-4 whitespace-nowrap">
+                          <div className="flex items-center space-x-2">
+                            <span className={`text-sm font-medium ${
+                              getSafetyMarginForSymbol(commodity.symbol, 'commodity') === 'NA' 
                           ? 'text-gray-500' 
                           : 'text-blue-700'
                       }`}>
-                        {getSafetyMarginForSymbol(commodity.symbol)}
+                              {getSafetyMarginForSymbol(commodity.symbol, 'commodity')}
                       </span>
+                            <button
+                              onClick={() => {
+                                const currentValue = symbolMargins?.find(
+                                  (sm: SymbolMargin) => sm.symbol.toLowerCase() === commodity.symbol.toLowerCase() && sm.symbolType === 'commodity'
+                                )?.safetyMargin || null;
+                                handleEditSafetyMargin(commodity.symbol, currentValue);
+                              }}
+                              className="text-gray-400 hover:text-blue-600 transition-colors"
+                              title="Edit Safety Margin"
+                            >
+                              <PencilIcon className="h-4 w-4" />
+                            </button>
                     </div>
-                  </div>
-                  
-                  {/* Safe PE */}
-                  {commodity.latestMonth && (
-                    <div>
-                      <div className="flex justify-between items-center text-xs">
-                        <span className="text-green-600 font-medium">
-                          {(() => {
-                            const nextMonth = getNextMonth(commodity.latestMonth.year, commodity.latestMonth.month);
-                            return `${formatMonthYear(nextMonth.year, nextMonth.month)} Safe PE`;
-                          })()}
-                        </span>
-                        <span className={`font-medium ${
+                        </td>
+                        <td className="px-6 py-4 whitespace-nowrap">
+                          {commodity.latestMonth ? (
+                            <span className={`text-sm font-medium ${
                           (() => {
                             const safetyMargin = symbolMargins?.find(
                               (sm: SymbolMargin) => sm.symbol.toLowerCase() === commodity.symbol.toLowerCase() && sm.symbolType === 'commodity'
@@ -2215,24 +2690,16 @@ export default function HistoricalData() {
                             return 'NA';
                           })()}
                         </span>
-                      </div>
-                    </div>
-                  )}
-                  
-                  {/* Success Rate for Next Month */}
-                  {commodity.latestMonth && (
-                    <div>
-                      <div className="flex justify-between items-center text-xs">
-                        <span className="text-purple-600 font-medium">
-                          {(() => {
-                            const nextMonth = getNextMonth(commodity.latestMonth.year, commodity.latestMonth.month);
-                            return `${formatMonthYear(nextMonth.year, nextMonth.month)} Success Rate`;
-                          })()}
-                        </span>
-                        <span className={`font-medium ${
+                          ) : (
+                            <span className="text-sm text-gray-500">No data</span>
+                          )}
+                        </td>
+                        <td className="px-6 py-4 whitespace-nowrap">
+                          {commodity.latestMonth ? (
+                            <span className={`text-sm font-medium ${
                           (() => {
                             const nextMonth = getNextMonth(commodity.latestMonth.year, commodity.latestMonth.month);
-                            const successRate = getSuccessRateForMonth(commodity.symbol, nextMonth.month);
+                                const successRate = getCommoditySuccessRateForMonth(commodity.symbol, nextMonth.month);
                             return successRate >= 60 ? 'text-green-700' : 
                                    successRate >= 40 ? 'text-yellow-600' : 
                                    'text-red-600';
@@ -2240,262 +2707,88 @@ export default function HistoricalData() {
                         }`}>
                           {(() => {
                             const nextMonth = getNextMonth(commodity.latestMonth.year, commodity.latestMonth.month);
-                            return getSuccessRateForMonth(commodity.symbol, nextMonth.month);
+                                return getCommoditySuccessRateForMonth(commodity.symbol, nextMonth.month);
                           })()}%
                         </span>
-                      </div>
-                    </div>
-                  )}
-                  
-                  {/* Horizontal divider */}
-                  <div className="border-t border-gray-200 my-2"></div>
-                  
-                  {/* Top Falls */}
-                  <div>
-                    <h4 className="text-xs font-medium text-red-600 mb-1">Top 3 Falls</h4>
-                    <div className="space-y-1">
-                      {commodity.topFalls.length > 0 ? (
-                        commodity.topFalls.map((fall, index) => (
-                          <div key={index} className="flex justify-between items-center text-xs">
-                            <span className="text-gray-600 truncate">
+                          ) : (
+                            <span className="text-sm text-gray-500">No data</span>
+                          )}
+                        </td>
+                        <td className="px-6 py-4">
+                          <div className="text-sm">
+                            {commodity.topFalls && commodity.topFalls.length > 0 ? (
+                              <div className="grid grid-cols-2 gap-1 min-w-[200px]">
+                                {commodity.topFalls.map((fall: any, index: number) => {
+                                  // Get safety margin for this symbol
+                                  const safetyMargin = symbolMargins?.find(
+                                    (sm: SymbolMargin) => sm.symbol.toLowerCase() === commodity.symbol.toLowerCase() && sm.symbolType === 'commodity'
+                                  )?.safetyMargin;
+                                  
+                                  // Calculate absolute fall percentage (falls are negative, so we make them positive for comparison)
+                                  const fallPercentage = Math.abs(fall.percentChange);
+                                  
+                                  // Determine color based on safety margin comparison
+                                  const fallColor = safetyMargin && fallPercentage <= safetyMargin 
+                                    ? 'text-gray-900' // Black if fall is within safety margin
+                                    : 'text-red-600'; // Red if fall exceeds safety margin
+                                  
+                                  return (
+                                    <div key={index} className="flex justify-between items-center bg-gray-50 px-2 py-1 rounded text-xs">
+                                      <span className="text-gray-600">
                               {new Date(fall.year, fall.month - 1).toLocaleDateString('en-US', { month: 'short', year: '2-digit' })}
                             </span>
-                            <span className="font-medium text-red-600 ml-1">
+                                      <span 
+                                        className={`font-medium ml-1 ${fallColor}`}
+                                        title={
+                                          safetyMargin 
+                                            ? `Fall: ${fallPercentage.toFixed(1)}%, Safety Margin: ${safetyMargin.toFixed(1)}% - ${fallPercentage <= safetyMargin ? 'Within safety margin' : 'Exceeds safety margin'}`
+                                            : `Fall: ${fallPercentage.toFixed(1)}% - No safety margin set`
+                                        }
+                                      >
                               {fall.percentChange.toFixed(1)}%
                             </span>
                           </div>
-                        ))
+                                  );
+                                })}
+                              </div>
                       ) : (
-                        <p className="text-xs text-gray-400">No data</p>
+                              <span className="text-gray-500 text-sm">No data</span>
                       )}
                     </div>
+                        </td>
+                      </tr>
+                      {/* Expandable seasonal analysis row */}
+                      {expandedCommodityRows.has(commodity.symbol) && (
+                        <tr>
+                          <td colSpan={8} className="px-6 py-4 bg-gray-50">
+                            <div className="border-t border-gray-200 pt-4">
+                              <h4 className="text-sm font-medium text-gray-900 mb-3">
+                                Seasonal Analysis - {commodity.symbol}
+                              </h4>
+                              {commoditySeasonalData[commodity.symbol] && commoditySeasonalData[commodity.symbol].length > 0 ? (
+                                <SeasonalChartTable 
+                                  data={commoditySeasonalData[commodity.symbol]} 
+                                  commodity={commodity.symbol} 
+                                />
+                              ) : (
+                                <div className="text-center py-8 text-gray-500">
+                                  <div className="text-sm">Loading seasonal data...</div>
                   </div>
+                              )}
                 </div>
-              </div>
-            </div>
-          ))}
-        </div>
-      )}
-
-
-      {/* Seasonal Chart Section */}
-      {activeTab === 'commodities' && (
-        <div className="bg-white shadow rounded-lg mb-6">
-          <div className="px-6 py-4 border-b border-gray-200">
-            <div className="flex justify-between items-center">
-              <h3 className="text-lg font-medium text-gray-900">Seasonal Price Analysis</h3>
-              <div className="flex items-center space-x-4">
-                <select
-                  value={selectedCommodityForSeasonal}
-                  onChange={(e) => {
-                    setSelectedCommodityForSeasonal(e.target.value);
-                    setShowSeasonalChart(e.target.value !== '');
-                  }}
-                  className="block w-48 border border-gray-300 rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-primary-500 focus:border-primary-500"
-                >
-                  <option value="">Select Commodity</option>
-                  {commodityStats?.map((commodity) => (
-                    <option key={commodity.symbol} value={commodity.symbol}>
-                      {commodity.symbol}
-                    </option>
+                          </td>
+                        </tr>
+                      )}
+                    </>
                   ))}
-                </select>
-                {selectedCommodityForSeasonal && (
-                  <button
-                    onClick={() => {
-                      setSelectedCommodityForSeasonal('');
-                      setShowSeasonalChart(false);
-                    }}
-                    className="text-sm text-gray-500 hover:text-gray-700"
-                  >
-                    Clear
-                  </button>
-                )}
+                </tbody>
+              </table>
               </div>
             </div>
-          </div>
-          
-          {showSeasonalChart && seasonalData && (
-            <div className="p-6">
-              {seasonalLoading ? (
-                <div className="flex justify-center items-center h-64">
-                  <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-primary-600"></div>
-                </div>
-              ) : (
-                <SeasonalChartTable 
-                  data={seasonalData} 
-                  commodity={selectedCommodityForSeasonal}
-                />
-              )}
-            </div>
-          )}
+
         </div>
       )}
 
-
-      {/* Price Chart for Last 5 Years */}
-      {activeTab === 'commodities' && chartData && chartData.length > 0 && (
-        <div className="bg-white shadow rounded-lg mb-6">
-          <div className="px-6 py-4 border-b border-gray-200">
-            <h3 className="text-lg font-medium text-gray-900">Commodity Price Trends (Last 5 Years)</h3>
-          </div>
-          <div className="p-6">
-            {/* Interactive Legend */}
-            <div className="mb-4 flex flex-wrap gap-4">
-              {chartData.map((commodity, index) => {
-                const colors = ['#3B82F6', '#EF4444', '#10B981', '#F59E0B', '#8B5CF6'];
-                const isVisible = visibleCommodities.has(commodity.symbol);
-                const color = colors[index % colors.length];
-                
-                return (
-                  <button
-                    key={commodity.symbol}
-                    onClick={() => toggleCommodityVisibility(commodity.symbol)}
-                    className={`flex items-center space-x-2 px-3 py-2 rounded-md text-sm font-medium transition-colors ${
-                      isVisible 
-                        ? 'bg-gray-100 text-gray-900 hover:bg-gray-200' 
-                        : 'bg-gray-50 text-gray-500 hover:bg-gray-100'
-                    }`}
-                  >
-                    <div 
-                      className="w-4 h-0.5 rounded"
-                      style={{ backgroundColor: isVisible ? color : '#D1D5DB' }}
-                    />
-                    <span className={isVisible ? 'text-gray-900' : 'text-gray-500'}>
-                      {commodity.symbol}
-                    </span>
-                  </button>
-                );
-              })}
-            </div>
-            
-            <div className="h-96 w-full relative">
-              {(() => {
-                if (!chartData || chartData.length === 0) return null;
-                
-                const colors = ['#3B82F6', '#EF4444', '#10B981', '#F59E0B', '#8B5CF6'];
-                const margin = { top: 20, right: 50, bottom: 40, left: 60 };
-                const width = 800 - margin.left - margin.right;
-                const height = 300 - margin.top - margin.bottom;
-                
-                // Filter data to only visible commodities
-                const visibleData = chartData.filter(commodity => visibleCommodities.has(commodity.symbol));
-                
-                if (visibleData.length === 0) {
-                  return (
-                    <svg width="100%" height="100%" viewBox="0 0 800 300" className="border border-gray-200 rounded">
-                      <text x="400" y="150" textAnchor="middle" fontSize="16" fill="#6B7280">
-                        Select commodities from the legend above to view chart
-                      </text>
-                    </svg>
-                  );
-                }
-                
-                // Get all dates and prices for scaling (only from visible commodities)
-                const allDates = visibleData.flatMap(commodity => commodity.data.map(d => new Date(d.date)));
-                const allPrices = visibleData.flatMap(commodity => commodity.data.map(d => d.price));
-                
-                const minDate = new Date(Math.min(...allDates.map(d => d.getTime())));
-                const maxDate = new Date(Math.max(...allDates.map(d => d.getTime())));
-                const minPrice = Math.min(...allPrices);
-                const maxPrice = Math.max(...allPrices);
-                
-                const xScale = (date: Date) => margin.left + ((date.getTime() - minDate.getTime()) / (maxDate.getTime() - minDate.getTime())) * width;
-                const yScale = (price: number) => margin.top + height - ((price - minPrice) / (maxPrice - minPrice)) * height;
-                  
-                // Create path for each commodity
-                const createPath = (data: any[]) => {
-                  if (data.length === 0) return '';
-                  const pathData = data.map((point, index) => {
-                    const x = xScale(new Date(point.date));
-                    const y = yScale(point.price);
-                    return `${index === 0 ? 'M' : 'L'} ${x} ${y}`;
-                  }).join(' ');
-                  return pathData;
-                };
-                
-                return (
-                  <svg 
-                    width="100%" 
-                    height="100%" 
-                    viewBox="0 0 800 300" 
-                    className="border border-gray-200 rounded cursor-crosshair"
-                    onMouseMove={(e) => handleMouseMove(e, chartData, visibleData, xScale, yScale)}
-                    onMouseLeave={handleMouseLeave}
-                  >
-                    {/* Y-axis */}
-                    <line x1={margin.left} y1={margin.top} x2={margin.left} y2={margin.top + height} stroke="#E5E7EB" strokeWidth="1" />
-                    
-                    {/* X-axis */}
-                    <line x1={margin.left} y1={margin.top + height} x2={margin.left + width} y2={margin.top + height} stroke="#E5E7EB" strokeWidth="1" />
-                    
-                    {/* Y-axis labels */}
-                    {[minPrice, (minPrice + maxPrice) / 2, maxPrice].map((price, index) => (
-                      <g key={index}>
-                        <line x1={margin.left - 5} y1={yScale(price)} x2={margin.left} y2={yScale(price)} stroke="#E5E7EB" strokeWidth="1" />
-                        <text x={margin.left - 10} y={yScale(price) + 4} textAnchor="end" fontSize="12" fill="#6B7280">
-                          ₹{price.toFixed(0)}
-                        </text>
-                      </g>
-                    ))}
-                    
-                    {/* X-axis labels */}
-                    {[0, 0.25, 0.5, 0.75, 1].map((ratio, index) => {
-                      const date = new Date(minDate.getTime() + ratio * (maxDate.getTime() - minDate.getTime()));
-                      return (
-                        <g key={index}>
-                          <line x1={xScale(date)} y1={margin.top + height} x2={xScale(date)} y2={margin.top + height + 5} stroke="#E5E7EB" strokeWidth="1" />
-                          <text x={xScale(date)} y={margin.top + height + 20} textAnchor="middle" fontSize="12" fill="#6B7280">
-                            {date.getFullYear()}
-                          </text>
-                        </g>
-                      );
-                    })}
-                    
-                    {/* Chart lines - only for visible commodities */}
-                    {visibleData.map((commodity, index) => {
-                      const originalIndex = chartData.findIndex(c => c.symbol === commodity.symbol);
-                      return (
-                        <g key={commodity.symbol}>
-                          <path
-                            d={createPath(commodity.data)}
-                            fill="none"
-                            stroke={colors[originalIndex % colors.length]}
-                            strokeWidth="2"
-                          />
-                        </g>
-                      );
-                    })}
-                  </svg>
-                );
-              })()}
-              
-              {/* Tooltip */}
-              {tooltip.visible && tooltip.data && (
-                <div
-                  className="absolute bg-gray-900 text-white text-sm rounded-lg px-3 py-2 pointer-events-none z-10 shadow-lg"
-                  style={{
-                    left: tooltip.x + 10,
-                    top: tooltip.y - 40,
-                    transform: 'translateX(-50%)'
-                  }}
-                >
-                  <div className="font-medium">{tooltip.data.symbol}</div>
-                  <div className="text-gray-300">
-                    {new Date(tooltip.data.date).toLocaleDateString('en-US', { 
-                      year: 'numeric', 
-                      month: 'short' 
-                    })}
-                  </div>
-                  <div className="text-yellow-400 font-medium">
-                    ₹{tooltip.data.price.toFixed(2)}
-                  </div>
-                </div>
-              )}
-            </div>
-          </div>
-        </div>
-      )}
 
       {/* Add/Edit Historical Data Dialog */}
       <Transition.Root show={openDialog} as={Fragment}>
