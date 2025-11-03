@@ -1,7 +1,7 @@
 import express from 'express';
 import { PrismaClient } from '@prisma/client';
 import { downloadLast10YearsMCXGoldData, bulkUploadCommodityData } from '../services/mcxDataService';
-import { downloadEquityData, bulkDownloadFOStocks, getNSEFOStocksList, getNSEFOStocksCount } from '../services/equityDataService';
+import { downloadEquityData, bulkDownloadFOStocks, previewBulkDownloadFOStocks, getNSEFOStocksList, getNSEFOStocksCount } from '../services/equityDataService';
 
 const router = express.Router();
 const prisma = new PrismaClient();
@@ -659,6 +659,37 @@ router.get('/fo-stocks', async (req, res) => {
     res.status(500).json({ 
       success: false,
       error: 'Failed to get F&O stocks list',
+      message: error instanceof Error ? error.message : 'Unknown error occurred'
+    });
+  }
+});
+
+// Preview bulk download equity data for all NSE F&O stocks (without storing)
+router.post('/preview-bulk-download-fo', async (req, res) => {
+  try {
+    const { startDate, endDate } = req.body;
+
+    if (!startDate || !endDate) {
+      return res.status(400).json({ 
+        success: false,
+        error: 'Start date and end date are required' 
+      });
+    }
+
+    console.log(`Starting preview for NSE F&O stocks from ${startDate} to ${endDate}...`);
+    
+    const result = await previewBulkDownloadFOStocks(new Date(startDate), new Date(endDate));
+    
+    res.json({
+      success: true,
+      message: `Preview completed! Total: ${result.total}, Success: ${result.success}, Failed: ${result.failed}`,
+      data: result
+    });
+  } catch (error) {
+    console.error('Error in preview bulk download:', error);
+    res.status(500).json({ 
+      success: false,
+      error: 'Failed to preview bulk download',
       message: error instanceof Error ? error.message : 'Unknown error occurred'
     });
   }

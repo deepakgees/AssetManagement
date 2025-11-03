@@ -442,3 +442,77 @@ export async function getNSEFOStocksCount(): Promise<number> {
   const stocks = await getNSEFOStocksFromDatabase();
   return stocks.length;
 }
+
+/**
+ * Preview bulk download equity data for all NSE F&O stocks (without storing in database)
+ * Returns the processed monthly data that would be stored
+ */
+export async function previewBulkDownloadFOStocks(startDate: Date, endDate: Date): Promise<{
+  total: number;
+  success: number;
+  failed: number;
+  data: Array<{
+    symbol: string;
+    status: 'success' | 'failed';
+    records: MonthlyEquityData[];
+    error?: string;
+  }>;
+}> {
+  // Get NSE F&O stocks from database
+  const foStocks = await getNSEFOStocksFromDatabase();
+  console.log(`Starting preview for ${foStocks.length} NSE F&O stocks...`);
+  
+  const results: Array<{
+    symbol: string;
+    status: 'success' | 'failed';
+    records: MonthlyEquityData[];
+    error?: string;
+  }> = [];
+  
+  let successCount = 0;
+  let failedCount = 0;
+  
+  for (let i = 0; i < foStocks.length; i++) {
+    const symbol = foStocks[i];
+    console.log(`Previewing ${i + 1}/${foStocks.length}: ${symbol}`);
+    
+    try {
+      // Fetch daily data
+      const dailyData = await fetchEquityData(symbol, startDate, endDate);
+      
+      // Process to monthly data
+      const monthlyData = processEquityToMonthlyData(dailyData);
+      
+      results.push({
+        symbol,
+        status: 'success',
+        records: monthlyData
+      });
+      successCount++;
+      console.log(`✅ ${symbol}: ${monthlyData.length} records prepared`);
+      
+      // Add a small delay to avoid overwhelming the API
+      await new Promise(resolve => setTimeout(resolve, 100));
+      
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+      results.push({
+        symbol,
+        status: 'failed',
+        records: [],
+        error: errorMessage
+      });
+      failedCount++;
+      console.error(`❌ ${symbol}: ${errorMessage}`);
+    }
+  }
+  
+  console.log(`Preview completed: ${successCount} success, ${failedCount} failed`);
+  
+  return {
+    total: foStocks.length,
+    success: successCount,
+    failed: failedCount,
+    data: results
+  };
+}

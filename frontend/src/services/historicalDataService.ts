@@ -255,6 +255,29 @@ export const getNSEFOStocks = async (): Promise<{ stocks: string[]; count: numbe
   return response.data.data;
 };
 
+export const previewBulkDownloadFOStocks = async (startDate: string, endDate: string): Promise<{
+  total: number;
+  success: number;
+  failed: number;
+  data: Array<{
+    symbol: string;
+    status: 'success' | 'failed';
+    records: Array<{
+      year: number;
+      month: number;
+      closingPrice: number;
+      percentChange: number | null;
+    }>;
+    error?: string;
+  }>;
+}> => {
+  const response = await axios.post(`${API_BASE_URL}/historicalData/preview-bulk-download-fo`, {
+    startDate,
+    endDate
+  });
+  return response.data.data;
+};
+
 export const bulkDownloadFOStocks = async (startDate: string, endDate: string): Promise<{
   total: number;
   success: number;

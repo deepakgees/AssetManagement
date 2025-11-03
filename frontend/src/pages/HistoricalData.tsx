@@ -39,6 +39,7 @@ import {
   bulkUploadCommodityData,
   getNSEFOStocks,
   bulkDownloadFOStocks,
+  previewBulkDownloadFOStocks,
   getEquityChartData,
   getEquitySeasonalData,
   getEquityStats,
@@ -307,6 +308,23 @@ export default function HistoricalData() {
   });
   const [showBulkDownload, setShowBulkDownload] = useState(false);
   const [foStocksCount, setFoStocksCount] = useState(0);
+  const [showPreviewDialog, setShowPreviewDialog] = useState(false);
+  const [previewData, setPreviewData] = useState<{
+    total: number;
+    success: number;
+    failed: number;
+    data: Array<{
+      symbol: string;
+      status: 'success' | 'failed';
+      records: Array<{
+        year: number;
+        month: number;
+        closingPrice: number;
+        percentChange: number | null;
+      }>;
+      error?: string;
+    }>;
+  } | null>(null);
 
   const [showBulkUpload, setShowBulkUpload] = useState(false);
   const [csvFile, setCsvFile] = useState<File | null>(null);
@@ -657,7 +675,20 @@ export default function HistoricalData() {
     },
   });
 
-  // Bulk download mutation
+  // Preview bulk download mutation
+  const previewBulkDownloadMutation = useMutation({
+    mutationFn: ({ startDate, endDate }: { startDate: string; endDate: string }) => 
+      previewBulkDownloadFOStocks(startDate, endDate),
+    onSuccess: (data) => {
+      setPreviewData(data);
+      setShowPreviewDialog(true);
+    },
+    onError: (error: any) => {
+      addMessage('error', `Failed to preview bulk download: ${error.response?.data?.error || error.message}`);
+    },
+  });
+
+  // Bulk download mutation (actual insert)
   const bulkDownloadMutation = useMutation({
     mutationFn: ({ startDate, endDate }: { startDate: string; endDate: string }) => 
       bulkDownloadFOStocks(startDate, endDate),
@@ -666,6 +697,8 @@ export default function HistoricalData() {
       queryClient.invalidateQueries({ queryKey: ['historicalDataStats'] });
       queryClient.invalidateQueries({ queryKey: ['historicalPriceEquity'] });
       setShowBulkDownload(false);
+      setShowPreviewDialog(false);
+      setPreviewData(null);
       setBulkDownloadData({ startDate: '', endDate: '' });
       addMessage('success', `Bulk download completed! Total: ${data.total}, Success: ${data.success}, Failed: ${data.failed}`);
     },
@@ -1153,10 +1186,29 @@ export default function HistoricalData() {
       return;
     }
 
+    // First show preview
+    previewBulkDownloadMutation.mutate({
+      startDate: bulkDownloadData.startDate,
+      endDate: bulkDownloadData.endDate,
+    });
+  };
+
+  const handleInsertPreviewData = () => {
+    if (!bulkDownloadData.startDate || !bulkDownloadData.endDate) {
+      addMessage('error', 'Date range is missing');
+      return;
+    }
+    
+    // Now actually insert the data
     bulkDownloadMutation.mutate({
       startDate: bulkDownloadData.startDate,
       endDate: bulkDownloadData.endDate,
     });
+  };
+
+  const handleCancelPreview = () => {
+    setShowPreviewDialog(false);
+    setPreviewData(null);
   };
 
   // Equity table sorting handler
@@ -1550,17 +1602,17 @@ export default function HistoricalData() {
             <div className="flex items-end">
               <button
                 onClick={handleBulkDownload}
-                disabled={bulkDownloadMutation.isPending}
+                disabled={previewBulkDownloadMutation.isPending || bulkDownloadMutation.isPending}
                 className="w-full inline-flex justify-center items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md shadow-sm text-white bg-green-600 hover:bg-green-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-green-500 disabled:opacity-50 disabled:cursor-not-allowed"
               >
-                {bulkDownloadMutation.isPending ? (
+                {previewBulkDownloadMutation.isPending ? (
                   <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white mr-2"></div>
                 ) : (
                   <svg className="h-4 w-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
                   </svg>
                 )}
-                {bulkDownloadMutation.isPending ? 'Bulk Downloading...' : 'Bulk Download All F&O Stocks'}
+                {previewBulkDownloadMutation.isPending ? 'Previewing...' : 'Bulk Download All F&O Stocks'}
               </button>
             </div>
           </div>
@@ -2726,6 +2778,157 @@ export default function HistoricalData() {
                       className="px-4 py-2 border border-transparent rounded-md text-sm font-medium text-white bg-primary-600 hover:bg-primary-700 disabled:opacity-50 disabled:cursor-not-allowed"
                     >
                       {editingRecord ? 'Update Record' : 'Add Record'}
+                    </button>
+                  </div>
+                </Dialog.Panel>
+              </Transition.Child>
+            </div>
+          </div>
+        </Dialog>
+      </Transition.Root>
+
+      {/* Bulk Download Preview Dialog */}
+      <Transition.Root show={showPreviewDialog} as={Fragment}>
+        <Dialog as="div" className="relative z-50" onClose={handleCancelPreview}>
+          <Transition.Child
+            as={Fragment}
+            enter="ease-out duration-300"
+            enterFrom="opacity-0"
+            enterTo="opacity-100"
+            leave="ease-in duration-200"
+            leaveFrom="opacity-100"
+            leaveTo="opacity-0"
+          >
+            <div className="fixed inset-0 bg-gray-500 bg-opacity-75 transition-opacity" />
+          </Transition.Child>
+
+          <div className="fixed inset-0 z-10 overflow-y-auto">
+            <div className="flex min-h-full items-end justify-center p-4 text-center sm:items-center sm:p-0">
+              <Transition.Child
+                as={Fragment}
+                enter="ease-out duration-300"
+                enterFrom="opacity-0 translate-y-4 sm:translate-y-0 sm:scale-95"
+                enterTo="opacity-100 translate-y-0 sm:scale-100"
+                leave="ease-in duration-200"
+                leaveFrom="opacity-100 translate-y-0 sm:scale-100"
+                leaveTo="opacity-0 translate-y-4 sm:translate-y-0 sm:scale-95"
+              >
+                <Dialog.Panel className="relative transform overflow-hidden rounded-lg bg-white px-4 pb-4 pt-5 text-left shadow-xl transition-all sm:my-8 sm:w-full sm:max-w-6xl sm:p-6">
+                  <div>
+                    <Dialog.Title as="h3" className="text-lg font-medium leading-6 text-gray-900 mb-4">
+                      Preview Bulk Download Data
+                    </Dialog.Title>
+                    
+                    {previewData && (
+                      <div className="mb-4">
+                        <div className="grid grid-cols-3 gap-4 mb-4">
+                          <div className="bg-blue-50 p-3 rounded-lg">
+                            <div className="text-sm text-blue-600">Total Stocks</div>
+                            <div className="text-2xl font-bold text-blue-900">{previewData.total}</div>
+                          </div>
+                          <div className="bg-green-50 p-3 rounded-lg">
+                            <div className="text-sm text-green-600">Success</div>
+                            <div className="text-2xl font-bold text-green-900">{previewData.success}</div>
+                          </div>
+                          <div className="bg-red-50 p-3 rounded-lg">
+                            <div className="text-sm text-red-600">Failed</div>
+                            <div className="text-2xl font-bold text-red-900">{previewData.failed}</div>
+                          </div>
+                        </div>
+                        
+                        <div className="text-sm text-gray-600 mb-4">
+                          <p>Date Range: {bulkDownloadData.startDate} to {bulkDownloadData.endDate}</p>
+                          <p className="mt-1">Total Records: {previewData.data.reduce((sum, item) => sum + item.records.length, 0)}</p>
+                        </div>
+
+                        <div className="max-h-96 overflow-y-auto border border-gray-200 rounded-lg">
+                          <table className="min-w-full divide-y divide-gray-200">
+                            <thead className="bg-gray-50 sticky top-0">
+                              <tr>
+                                <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Symbol</th>
+                                <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Status</th>
+                                <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Records</th>
+                                <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Preview</th>
+                              </tr>
+                            </thead>
+                            <tbody className="bg-white divide-y divide-gray-200">
+                              {previewData.data.map((item, index) => (
+                                <tr key={index} className={item.status === 'failed' ? 'bg-red-50' : ''}>
+                                  <td className="px-4 py-3 whitespace-nowrap text-sm font-medium text-gray-900">
+                                    {item.symbol}
+                                  </td>
+                                  <td className="px-4 py-3 whitespace-nowrap text-sm">
+                                    <span className={`px-2 py-1 rounded-full text-xs font-medium ${
+                                      item.status === 'success' 
+                                        ? 'bg-green-100 text-green-800' 
+                                        : 'bg-red-100 text-red-800'
+                                    }`}>
+                                      {item.status === 'success' ? 'Success' : 'Failed'}
+                                    </span>
+                                  </td>
+                                  <td className="px-4 py-3 whitespace-nowrap text-sm text-gray-500">
+                                    {item.records.length} records
+                                  </td>
+                                  <td className="px-4 py-3 text-sm text-gray-500">
+                                    {item.status === 'success' && item.records.length > 0 ? (
+                                      <details className="cursor-pointer">
+                                        <summary className="text-blue-600 hover:text-blue-800">
+                                          View {item.records.length} records
+                                        </summary>
+                                        <div className="mt-2 max-h-40 overflow-y-auto">
+                                          <table className="min-w-full text-xs">
+                                            <thead className="bg-gray-100">
+                                              <tr>
+                                                <th className="px-2 py-1 text-left">Year</th>
+                                                <th className="px-2 py-1 text-left">Month</th>
+                                                <th className="px-2 py-1 text-right">Closing Price</th>
+                                                <th className="px-2 py-1 text-right">% Change</th>
+                                              </tr>
+                                            </thead>
+                                            <tbody className="divide-y divide-gray-200">
+                                              {item.records.map((record, idx) => (
+                                                <tr key={idx}>
+                                                  <td className="px-2 py-1">{record.year}</td>
+                                                  <td className="px-2 py-1">{new Date(2000, record.month - 1).toLocaleDateString('en-US', { month: 'short' })}</td>
+                                                  <td className="px-2 py-1 text-right">₹{record.closingPrice.toFixed(2)}</td>
+                                                  <td className="px-2 py-1 text-right">
+                                                    {record.percentChange !== null 
+                                                      ? `${record.percentChange > 0 ? '+' : ''}${record.percentChange.toFixed(2)}%`
+                                                      : 'N/A'}
+                                                  </td>
+                                                </tr>
+                                              ))}
+                                            </tbody>
+                                          </table>
+                                        </div>
+                                      </details>
+                                    ) : (
+                                      <span className="text-red-600">{item.error || 'No data'}</span>
+                                    )}
+                                  </td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                  <div className="mt-6 flex justify-end space-x-3">
+                    <button
+                      type="button"
+                      onClick={handleCancelPreview}
+                      className="px-4 py-2 border border-gray-300 rounded-md text-sm font-medium text-gray-700 bg-white hover:bg-gray-50"
+                    >
+                      Cancel
+                    </button>
+                    <button
+                      type="button"
+                      onClick={handleInsertPreviewData}
+                      disabled={bulkDownloadMutation.isPending || !previewData || previewData.success === 0}
+                      className="px-4 py-2 border border-transparent rounded-md text-sm font-medium text-white bg-green-600 hover:bg-green-700 disabled:opacity-50 disabled:cursor-not-allowed"
+                    >
+                      {bulkDownloadMutation.isPending ? 'Inserting...' : 'Insert Records'}
                     </button>
                   </div>
                 </Dialog.Panel>
