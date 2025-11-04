@@ -31,6 +31,7 @@ export interface Position {
     lastPrice?: number;
     marketValue?: number;
     pnl?: number;
+    marginBlocked?: number;
   }[];
   createdAt: string;
   updatedAt?: string;

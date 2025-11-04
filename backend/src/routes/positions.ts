@@ -207,23 +207,12 @@ router.get('/', async (req: Request, res: Response) => {
       // Group positions by trading symbol and family
       const familyPositions = new Map<string, any>();
       
-      // Get all unique trading symbols to fetch margins in batch
-      const uniqueSymbols = [...new Set(positions.map(p => p.tradingSymbol))];
-      const symbolMargins = new Map<string, number>();
-      
-      // Fetch margins for all symbols
-      for (const symbol of uniqueSymbols) {
-        const margin = await getMarginForSymbol(symbol);
-        symbolMargins.set(symbol, margin);
-      }
-      
       positions.forEach(position => {
         const familyKey = position.account?.family || 'Unknown';
         const symbolKey = `${position.tradingSymbol}-${position.side}`;
         const key = `${familyKey}-${symbolKey}`;
         
         if (!familyPositions.has(key)) {
-          const margin = symbolMargins.get(position.tradingSymbol) || 0;
           familyPositions.set(key, {
             id: key,
             tradingSymbol: position.tradingSymbol,
@@ -239,8 +228,7 @@ router.get('/', async (req: Request, res: Response) => {
             family: familyKey,
             accountIds: [],
             accounts: [],
-            marginBlocked: 0,
-            symbolMargin: margin,
+            marginBlocked: 0, // Will sum up from individual positions
             createdAt: position.createdAt,
             updatedAt: position.updatedAt,
           });
@@ -260,6 +248,9 @@ router.get('/', async (req: Request, res: Response) => {
         familyPosition.lastPrice = position.lastPrice;
         familyPosition.marketValue += position.marketValue; // Sum up individual marketValue from database
         familyPosition.pnl += position.pnl; // Sum up individual pnl from database
+        // Sum up marginBlocked from database (calculated from Kite Connect API)
+        const positionMarginBlocked = position.marginBlocked || 0;
+        familyPosition.marginBlocked += positionMarginBlocked;
         familyPosition.accountIds.push(position.accountId);
         familyPosition.accounts.push({
           id: position.account!.id,
@@ -271,21 +262,35 @@ router.get('/', async (req: Request, res: Response) => {
           lastPrice: position.lastPrice,
           marketValue: position.marketValue,
           pnl: position.pnl,
+          marginBlocked: positionMarginBlocked,
         });
       });
 
       // Convert to array and filter out zero quantity positions
       const aggregatedPositions = Array.from(familyPositions.values())
         .filter(pos => pos.quantity !== 0)
-        .map(pos => ({
-          ...pos,
-          // Market value and P&L are already summed up from individual positions
-          pnlPercentage: pos.averagePrice > 0 ? (pos.pnl / (pos.averagePrice * Math.abs(pos.quantity))) * 100 : 0,
-          // Calculate margin blocked: quantity * symbol margin
-          marginBlocked: Math.abs(pos.quantity) * pos.symbolMargin,
-        }));
+        .map(async pos => {
+          // Use sum of marginBlocked from individual positions
+          // If marginBlocked is null or undefined (not set), fall back to calculation for backward compatibility
+          let marginBlocked = pos.marginBlocked;
+          if (marginBlocked === null || marginBlocked === undefined) {
+            // Fallback: calculate using symbol margin for backward compatibility
+            const margin = await getMarginForSymbol(pos.tradingSymbol);
+            marginBlocked = Math.abs(pos.quantity) * margin;
+          }
+          return {
+            ...pos,
+            // Market value and P&L are already summed up from individual positions
+            pnlPercentage: pos.averagePrice > 0 ? (pos.pnl / (pos.averagePrice * Math.abs(pos.quantity))) * 100 : 0,
+            // Use sum of marginBlocked from individual positions (or calculated fallback)
+            marginBlocked: marginBlocked,
+          };
+        });
+      
+      // Wait for all async operations to complete
+      const finalPositions = await Promise.all(aggregatedPositions);
 
-      res.json({ positions: aggregatedPositions });
+      res.json({ positions: finalPositions });
     } else {
       // Regular individual positions
       const positions = await prisma.position.findMany({
@@ -301,14 +306,20 @@ router.get('/', async (req: Request, res: Response) => {
         orderBy: { createdAt: 'desc' },
       });
 
-      // Add margin blocked calculation for individual positions
+      // Use marginBlocked from database (calculated during sync from Kite Connect API)
+      // Fall back to calculation if marginBlocked is null (for backward compatibility)
       const positionsWithMargin = await Promise.all(
         positions.map(async (position) => {
-          const margin = await getMarginForSymbol(position.tradingSymbol);
+          // Use marginBlocked from database if available, otherwise calculate using symbol margin
+          let marginBlocked = position.marginBlocked;
+          if (marginBlocked === null || marginBlocked === undefined) {
+            // Fallback to calculation for positions without marginBlocked (backward compatibility)
+            const margin = await getMarginForSymbol(position.tradingSymbol);
+            marginBlocked = Math.abs(position.quantity) * margin;
+          }
           return {
             ...position,
-            marginBlocked: Math.abs(position.quantity) * margin,
-            symbolMargin: margin,
+            marginBlocked: marginBlocked,
           };
         })
       );

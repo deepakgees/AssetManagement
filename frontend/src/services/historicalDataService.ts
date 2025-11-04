@@ -399,3 +399,21 @@ export const bulkUploadCommodityData = async (symbol: string, data: Array<{ year
   });
   return response.data.data;
 };
+
+// Get option chain data and find premium for selling put option near safe PE Price
+export interface OptionChainResponse {
+  symbol: string;
+  safePEPrice: number | null;
+  premium: number | null;
+  strikePrice: number | null;
+  found: boolean;
+}
+
+export const getOptionChainPremium = async (symbol: string, safePEPrice?: number): Promise<OptionChainResponse> => {
+  const params = new URLSearchParams();
+  if (safePEPrice) {
+    params.append('safePEPrice', safePEPrice.toString());
+  }
+  const response = await axios.get(`${API_BASE_URL}/historicalData/option-chain/${encodeURIComponent(symbol)}?${params.toString()}`);
+  return response.data;
+};

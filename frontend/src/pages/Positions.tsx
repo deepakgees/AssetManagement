@@ -1239,14 +1239,13 @@ export default function Positions() {
                                     {account.quantity !== undefined ? formatNumber(account.quantity) : 'N/A'}
                                   </td>
                                   <td className="px-6 py-3 whitespace-nowrap text-sm text-gray-600">
-                                    {position.symbolMargin !== undefined && account.quantity !== undefined ? 
-                                      formatCurrency(Math.abs(account.quantity) * position.symbolMargin) : 'N/A'}
+                                    {formatCurrency(account.marginBlocked || 0)}
                                   </td>
                                   <td className="px-6 py-3 whitespace-nowrap text-sm text-gray-600">
                                     {account.marketValue !== undefined && account.pnl !== undefined ? (
                                       <span className={getPnLColor(-account.marketValue - account.pnl)}>
                                         {formatCurrency(-account.marketValue - account.pnl)}
-                                        {getMarginPercentage(-account.marketValue - account.pnl, Math.abs(account.quantity || 0) * (position.symbolMargin || 0))}
+                                        {getMarginPercentage(-account.marketValue - account.pnl, account.marginBlocked || 0)}
                                       </span>
                                     ) : 'N/A'}
                                   </td>
@@ -1254,7 +1253,7 @@ export default function Positions() {
                                     {account.marketValue !== undefined ? (
                                       <>
                                         {formatCurrency(-account.marketValue)}
-                                        {getMarginPercentage(-account.marketValue, Math.abs(account.quantity || 0) * (position.symbolMargin || 0))}
+                                        {getMarginPercentage(-account.marketValue, account.marginBlocked || 0)}
                                       </>
                                     ) : 'N/A'}
                                   </td>

@@ -17,6 +17,7 @@ import {
   ChevronDownIcon,
   ChevronDownIcon as ChevronDown,
   ChevronRightIcon as ChevronRight,
+  ArrowPathIcon,
 } from '@heroicons/react/24/outline';
 import Layout from '../components/Layout';
 import { 
@@ -47,6 +48,7 @@ import {
   getCommodityChartData,
   getCommoditySeasonalData,
   getAllCommoditiesSeasonalData,
+  getOptionChainPremium,
   type HistoricalData,
   type HistoricalPriceCommodity,
   type CreateHistoricalDataData,
@@ -55,6 +57,7 @@ import {
   type UpdateHistoricalDataData,
   type UpdateCommodityData,
   type UpdateEquityData,
+  type OptionChainResponse,
 } from '../services/historicalDataService';
 import { getSymbolMargins, updateSafetyMargin, type SymbolMargin } from '../services/symbolMarginsService';
 
@@ -349,6 +352,42 @@ export default function HistoricalData() {
   const [expandedEquityRows, setExpandedEquityRows] = useState<Set<string>>(new Set());
   const [equitySeasonalData, setEquitySeasonalData] = useState<Record<string, any[]>>({});
   const [loadingSeasonalData, setLoadingSeasonalData] = useState<Set<string>>(new Set());
+  
+  // Option premiums state
+  const [optionPremiums, setOptionPremiums] = useState<Record<string, OptionChainResponse>>({});
+  const [loadingOptionPremiums, setLoadingOptionPremiums] = useState<Set<string>>(new Set());
+  const [optionPremiumRefreshInterval, setOptionPremiumRefreshInterval] = useState<number | null>(null); // in milliseconds, null = disabled
+  
+  // Refresh progress tracking
+  const [refreshProgress, setRefreshProgress] = useState<{
+    total: number;
+    completed: number;
+    success: number;
+    failed: number;
+    isRefreshing: boolean;
+  }>({
+    total: 0,
+    completed: 0,
+    success: 0,
+    failed: 0,
+    isRefreshing: false,
+  });
+  
+  // Get last refresh time from localStorage (persists across page reloads)
+  const getLastOptionPremiumRefresh = (): Date | null => {
+    const stored = localStorage.getItem('lastOptionPremiumRefresh');
+    return stored ? new Date(stored) : null;
+  };
+  
+  const setLastOptionPremiumRefresh = (date: Date | null) => {
+    if (date) {
+      localStorage.setItem('lastOptionPremiumRefresh', date.toISOString());
+    } else {
+      localStorage.removeItem('lastOptionPremiumRefresh');
+    }
+  };
+  
+  const [lastOptionPremiumRefresh, setLastOptionPremiumRefreshState] = useState<Date | null>(getLastOptionPremiumRefresh());
   
   // Commodity table pagination state
   const [commodityCurrentPage, setCommodityCurrentPage] = useState(1);
@@ -934,7 +973,182 @@ export default function HistoricalData() {
     });
     
     setEquitySortedData(sorted);
-  }, [equityStatsData, equitySortField, equitySortDirection, symbolMargins, getEquitySuccessRateForMonth, allEquitySeasonalData]);
+  }, [equityStatsData, equitySortField, equitySortDirection, symbolMargins, getEquitySuccessRateForMonth, allEquitySeasonalData, optionPremiums]);
+
+  // Fetch option premiums for equities when data is loaded
+  // This function is extracted so it can be called both on mount and on interval
+  const fetchOptionPremiums = useCallback(async (forceRefresh: boolean = false) => {
+    if (!equityStatsData || equityStatsData.length === 0 || activeTab !== 'equities') {
+      return;
+    }
+
+    // Filter symbols that need to be fetched
+    const allSymbols = equityStatsData.map(item => item.symbol);
+    const symbolsToFetch = allSymbols.filter(symbol => {
+      if (forceRefresh) return true;
+      return !loadingOptionPremiums.has(symbol) && !optionPremiums[symbol];
+    });
+
+    // Filter symbols that have valid data (stock data and safety margin)
+    const validSymbols = symbolsToFetch.filter(symbol => {
+      const stock = equityStatsData.find(s => s.symbol === symbol);
+      if (!stock || !stock.latestMonth) return false;
+      
+      const safetyMargin = symbolMargins?.find(
+        (sm: SymbolMargin) => sm.symbol.toLowerCase() === symbol.toLowerCase() && sm.symbolType === 'equity'
+      );
+      return safetyMargin && safetyMargin.safetyMargin;
+    });
+
+    if (validSymbols.length === 0) {
+      return;
+    }
+
+    // Initialize progress tracking
+    setRefreshProgress({
+      total: validSymbols.length,
+      completed: 0,
+      success: 0,
+      failed: 0,
+      isRefreshing: true,
+    });
+
+    // Fetch premiums in batches to avoid overwhelming the API
+    const batchSize = 5;
+    let successCount = 0;
+    let failedCount = 0;
+    const refreshTime = new Date();
+
+    for (let i = 0; i < validSymbols.length; i += batchSize) {
+      const batch = validSymbols.slice(i, i + batchSize);
+      await Promise.all(
+        batch.map(async (symbol) => {
+          // Find the stock data and calculate safe PE Price
+          const stock = equityStatsData.find(s => s.symbol === symbol);
+          if (!stock || !stock.latestMonth) {
+            return;
+          }
+
+          const safetyMargin = symbolMargins?.find(
+            (sm: SymbolMargin) => sm.symbol.toLowerCase() === symbol.toLowerCase() && sm.symbolType === 'equity'
+          );
+
+          if (!safetyMargin || !safetyMargin.safetyMargin) {
+            return;
+          }
+
+          const safePE = calculateSafePE(stock.latestMonth.closingPrice, safetyMargin.safetyMargin);
+
+          // Mark as loading
+          setLoadingOptionPremiums(prev => new Set(prev).add(symbol));
+
+          try {
+            const premiumData = await getOptionChainPremium(symbol, safePE);
+            setOptionPremiums(prev => ({
+              ...prev,
+              [symbol]: premiumData,
+            }));
+            successCount++;
+            // Update last refresh time when we get any successful response
+            setLastOptionPremiumRefresh(refreshTime);
+            setLastOptionPremiumRefreshState(refreshTime);
+          } catch (error) {
+            console.error(`Error fetching option premium for ${symbol}:`, error);
+            // Store error state
+            setOptionPremiums(prev => ({
+              ...prev,
+              [symbol]: {
+                symbol,
+                safePEPrice: safePE,
+                premium: null,
+                strikePrice: null,
+                found: false,
+              },
+            }));
+            failedCount++;
+          } finally {
+            // Remove from loading set
+            setLoadingOptionPremiums(prev => {
+              const next = new Set(prev);
+              next.delete(symbol);
+              return next;
+            });
+
+            // Update progress
+            const completed = successCount + failedCount;
+            setRefreshProgress(prev => ({
+              ...prev,
+              completed,
+              success: successCount,
+              failed: failedCount,
+            }));
+          }
+        })
+      );
+      
+      // Small delay between batches to avoid rate limiting
+      if (i + batchSize < validSymbols.length) {
+        await new Promise(resolve => setTimeout(resolve, 500));
+      }
+    }
+
+    // Mark refresh as complete
+    setRefreshProgress(prev => ({
+      ...prev,
+      isRefreshing: false,
+    }));
+  }, [equityStatsData, symbolMargins, activeTab, optionPremiums, loadingOptionPremiums]);
+
+  // Initial fetch and set up refresh interval
+  useEffect(() => {
+    if (!equityStatsData || equityStatsData.length === 0 || activeTab !== 'equities') {
+      return;
+    }
+
+    // Check if data is stale (older than 24 hours) or doesn't exist
+    const shouldRefreshOnStart = () => {
+      const lastRefresh = getLastOptionPremiumRefresh();
+      
+      if (!lastRefresh) {
+        // No data exists, should refresh
+        return true;
+      }
+      
+      const now = new Date();
+      const hoursSinceLastRefresh = (now.getTime() - lastRefresh.getTime()) / (1000 * 60 * 60);
+      
+      // Refresh if last update was more than 24 hours ago
+      return hoursSinceLastRefresh >= 24;
+    };
+
+    // Initial fetch - only if data is stale or doesn't exist
+    if (shouldRefreshOnStart()) {
+      fetchOptionPremiums(true); // Force refresh to ensure fresh data on app start
+    }
+    
+    // Update state with stored value
+    setLastOptionPremiumRefreshState(getLastOptionPremiumRefresh());
+
+    // Set up automatic refresh interval (default: 5 minutes = 300000ms)
+    // Set to null to disable auto-refresh
+    const refreshIntervalMs = optionPremiumRefreshInterval ?? 5 * 60 * 1000; // 5 minutes default
+    
+    let intervalId: NodeJS.Timeout | null = null;
+    
+    if (refreshIntervalMs > 0) {
+      intervalId = setInterval(() => {
+        fetchOptionPremiums(true); // Force refresh on interval
+      }, refreshIntervalMs);
+    }
+
+    // Cleanup interval on unmount or when dependencies change
+    return () => {
+      if (intervalId) {
+        clearInterval(intervalId);
+      }
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [equityStatsData, symbolMargins, activeTab]);
 
   // Then apply pagination to the sorted data
   const equityTotalPages = Math.ceil((equitySortedData?.length || 0) / equityItemsPerPage);
@@ -1764,15 +1978,54 @@ export default function HistoricalData() {
         <h1 className="text-2xl font-bold text-gray-900">Historical Data Management</h1>
         <div className="flex space-x-3">
           {activeTab === 'equities' && (
-            <button
-              onClick={() => setShowBulkDownload(!showBulkDownload)}
-              className="inline-flex items-center px-4 py-2 border border-gray-300 text-sm font-medium rounded-md shadow-sm text-gray-700 bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-green-500"
-            >
-              <svg className="h-4 w-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
-              </svg>
-              Bulk Download F&O Stocks
-            </button>
+            <>
+              <button
+                onClick={() => {
+                  setOptionPremiums({}); // Clear cache to force refresh
+                  fetchOptionPremiums(true);
+                }}
+                disabled={!equityStatsData || equityStatsData.length === 0 || refreshProgress.isRefreshing}
+                className="inline-flex items-center px-4 py-2 border border-gray-300 text-sm font-medium rounded-md shadow-sm text-gray-700 bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                title={
+                  refreshProgress.isRefreshing
+                    ? `Refreshing: ${refreshProgress.completed}/${refreshProgress.total} (Success: ${refreshProgress.success}, Failed: ${refreshProgress.failed})`
+                    : lastOptionPremiumRefresh
+                    ? `Last refreshed: ${lastOptionPremiumRefresh.toLocaleTimeString()}`
+                    : 'Refresh option premiums from NSE'
+                }
+              >
+                <ArrowPathIcon className={`h-4 w-4 mr-2 ${refreshProgress.isRefreshing ? 'animate-spin' : ''}`} />
+                {refreshProgress.isRefreshing ? (
+                  <span className="flex items-center">
+                    Refreshing... ({refreshProgress.completed}/{refreshProgress.total})
+                    {refreshProgress.completed > 0 && (
+                      <span className="ml-2 text-xs">
+                        <span className="text-green-600">✓{refreshProgress.success}</span>
+                        {refreshProgress.failed > 0 && (
+                          <span className="ml-1 text-red-600">✗{refreshProgress.failed}</span>
+                        )}
+                      </span>
+                    )}
+                  </span>
+                ) : (
+                  <span>Refresh Option Premiums</span>
+                )}
+                {!refreshProgress.isRefreshing && lastOptionPremiumRefresh && (
+                  <span className="ml-2 text-xs text-gray-500">
+                    ({lastOptionPremiumRefresh.toLocaleTimeString()})
+                  </span>
+                )}
+              </button>
+              <button
+                onClick={() => setShowBulkDownload(!showBulkDownload)}
+                className="inline-flex items-center px-4 py-2 border border-gray-300 text-sm font-medium rounded-md shadow-sm text-gray-700 bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-green-500"
+              >
+                <svg className="h-4 w-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
+                </svg>
+                Bulk Download F&O Stocks
+              </button>
+            </>
           )}
           {activeTab === 'commodities' && (
             <button
@@ -2183,6 +2436,19 @@ export default function HistoricalData() {
                     </th>
                     <th 
                       className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100"
+                      onClick={() => handleEquitySort('optionPremium')}
+                    >
+                      <div className="flex items-center space-x-1">
+                        <span>Option Premium (PE @ Safe PE)</span>
+                        {equitySortField === 'optionPremium' && (
+                          equitySortDirection === 'asc' ? 
+                            <ChevronUpIcon className="h-4 w-4" /> : 
+                            <ChevronDownIcon className="h-4 w-4" />
+                        )}
+                      </div>
+                    </th>
+                    <th 
+                      className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100"
                       onClick={() => handleEquitySort('successRate')}
                     >
                       <div className="flex items-center space-x-1">
@@ -2306,6 +2572,42 @@ export default function HistoricalData() {
                         )}
                       </td>
                       <td className="px-6 py-4 whitespace-nowrap">
+                        {(() => {
+                          const optionData = optionPremiums[stock.symbol];
+                          const isLoading = loadingOptionPremiums.has(stock.symbol);
+                          
+                          if (isLoading) {
+                            return (
+                              <span className="text-sm text-gray-500">
+                                <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-gray-900 inline-block mr-2"></div>
+                                Loading...
+                              </span>
+                            );
+                          }
+                          
+                          if (!optionData) {
+                            return <span className="text-sm text-gray-500">-</span>;
+                          }
+                          
+                          if (!optionData.found || !optionData.premium) {
+                            return <span className="text-sm text-gray-500">N/A</span>;
+                          }
+                          
+                          return (
+                            <div className="text-sm">
+                              <div className="font-medium text-green-700">
+                                ₹{formatPrice(optionData.premium)}
+                              </div>
+                              {optionData.strikePrice && (
+                                <div className="text-xs text-gray-500">
+                                  Strike: ₹{formatPrice(optionData.strikePrice)}
+                                </div>
+                              )}
+                            </div>
+                          );
+                        })()}
+                      </td>
+                      <td className="px-6 py-4 whitespace-nowrap">
                         {stock.latestMonth ? (
                           <span className={`text-sm font-medium ${
                             (() => {
@@ -2371,7 +2673,7 @@ export default function HistoricalData() {
                     {/* Expandable seasonal analysis row */}
                     {expandedEquityRows.has(stock.symbol) && (
                       <tr>
-                        <td colSpan={7} className="px-6 py-4 bg-gray-50">
+                        <td colSpan={8} className="px-6 py-4 bg-gray-50">
                           <div className="border-t border-gray-200 pt-4">
                             <h4 className="text-sm font-medium text-gray-900 mb-3">
                               Seasonal Analysis - {stock.symbol}

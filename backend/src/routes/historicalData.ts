@@ -1,5 +1,6 @@
 import express from 'express';
 import { PrismaClient } from '@prisma/client';
+import axios from 'axios';
 import { downloadLast10YearsMCXGoldData, bulkUploadCommodityData } from '../services/mcxDataService';
 import { downloadEquityData, bulkDownloadFOStocks, previewBulkDownloadFOStocks, getNSEFOStocksList, getNSEFOStocksCount } from '../services/equityDataService';
 
@@ -942,6 +943,99 @@ router.get('/equity-stats', async (req, res) => {
     res.status(500).json({ 
       success: false,
       error: 'Failed to get equity stats',
+      message: error instanceof Error ? error.message : 'Unknown error occurred'
+    });
+  }
+});
+
+// Get option chain data from NSE and find premium for selling put option near safe PE Price
+router.get('/option-chain/:symbol', async (req, res) => {
+  try {
+    const { symbol } = req.params;
+    const { safePEPrice } = req.query; // Safe PE Price as query parameter
+    
+    if (!symbol) {
+      return res.status(400).json({ error: 'Symbol is required' });
+    }
+
+    // NSE API endpoint
+    const nseUrl = `https://www.nseindia.com/api/option-chain-equities?symbol=${encodeURIComponent(symbol)}`;
+    
+    try {
+      // Fetch option chain data from NSE
+      // Note: NSE API may require specific headers or cookies
+      const response = await axios.get(nseUrl, {
+        headers: {
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
+          'Accept': 'application/json',
+          'Accept-Language': 'en-US,en;q=0.9',
+          'Referer': 'https://www.nseindia.com/',
+        },
+        timeout: 10000,
+      });
+
+      const optionChainData = response.data;
+      
+      // Find the put option closest to the safe PE Price
+      let closestPutPremium = null;
+      let closestStrike = null;
+      let minDifference = Infinity;
+
+      if (optionChainData && optionChainData.records && optionChainData.records.data) {
+        const records = optionChainData.records.data;
+        const safePE = safePEPrice ? parseFloat(safePEPrice as string) : null;
+
+        for (const record of records) {
+          if (record.PE && record.strikePrice) {
+            const strikePrice = record.strikePrice;
+            const lastPrice = record.PE.lastPrice || record.PE.askPrice || record.PE.bidPrice || 0;
+            
+            if (lastPrice > 0) {
+              // Calculate difference from safe PE Price
+              const difference = safePE ? Math.abs(strikePrice - safePE) : strikePrice;
+              
+              // If we have a safe PE Price, find the closest strike
+              // Otherwise, find the lowest strike with a premium
+              if (safePE) {
+                if (difference < minDifference) {
+                  minDifference = difference;
+                  closestPutPremium = lastPrice;
+                  closestStrike = strikePrice;
+                }
+              } else {
+                // If no safe PE Price provided, find the lowest strike with premium
+                if (strikePrice < (closestStrike || Infinity)) {
+                  closestPutPremium = lastPrice;
+                  closestStrike = strikePrice;
+                }
+              }
+            }
+          }
+        }
+      }
+
+      res.json({
+        symbol,
+        safePEPrice: safePEPrice ? parseFloat(safePEPrice as string) : null,
+        premium: closestPutPremium,
+        strikePrice: closestStrike,
+        found: closestPutPremium !== null,
+      });
+    } catch (nseError: any) {
+      console.error(`Error fetching option chain for ${symbol}:`, nseError.message);
+      res.status(500).json({
+        error: 'Failed to fetch option chain data from NSE',
+        message: nseError.response?.data?.message || nseError.message,
+        symbol,
+        premium: null,
+        strikePrice: null,
+        found: false,
+      });
+    }
+  } catch (error) {
+    console.error('Error in option chain endpoint:', error);
+    res.status(500).json({ 
+      error: 'Failed to fetch option chain data',
       message: error instanceof Error ? error.message : 'Unknown error occurred'
     });
   }
