@@ -74,6 +74,7 @@ model Position {
   product       String
   side          String
   accountId     Int
+  marginBlocked Float? // Margin blocked for this position (calculated from Kite Connect API)
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt
   account       Account  @relation(fields: [accountId], references: [id], onDelete: Cascade)

@@ -30,6 +30,7 @@
 
 import { KiteConnect } from 'kiteconnect';
 import { prisma } from '../src/index';
+import axios from 'axios';
 
 // Global KiteConnect instance and session management
 let kc: KiteConnect | null = null;
@@ -410,19 +411,22 @@ export async function syncPositions(existingAccount: any) {
             })
         ]);
 
-        // Insert new positions 
-        if (allPositions.length > 0) {
+        // Calculate margins for each position using Kite Connect API
+        const positionsWithMargins = await calculatePositionsMargins(allPositions, existingAccount.apiKey || '');
+
+        // Insert new positions with margin blocked
+        if (positionsWithMargins.length > 0) {
             try {
-                console.log('Sample position data being inserted:', allPositions[0]);
-                console.log('🔍 Debug - All positions being inserted:', allPositions.map(p => p.tradingSymbol));
+                console.log('Sample position data being inserted:', positionsWithMargins[0]);
+                console.log('🔍 Debug - All positions being inserted:', positionsWithMargins.map(p => p.tradingSymbol));
                 await prisma.position.createMany({
-                    data: allPositions,
+                    data: positionsWithMargins,
                     skipDuplicates: true // Skip duplicates to avoid constraint errors
                 });
-                console.log(`Successfully inserted ${allPositions.length} positions into database`);
+                console.log(`Successfully inserted ${positionsWithMargins.length} positions with margins into database`);
             } catch (dbError: any) {
                 console.error('Database insertion error:', dbError.message);
-                console.error('Sample problematic data:', allPositions.slice(0, 2));
+                console.error('Sample problematic data:', positionsWithMargins.slice(0, 2));
                 throw new Error(`Database Error: ${dbError.message}`);
             }
         }
@@ -431,6 +435,94 @@ export async function syncPositions(existingAccount: any) {
         console.log(`Successfully synced ${filteredNetPositions.length} net positions for account ${existingAccount.id} (skipped all day positions)`);        
         return positionsResponse;
     }, existingAccount);
+}
+
+// Helper function to calculate margins for positions using Kite Connect API
+// Reference: https://kite.trade/docs/connect/v3/margins/
+async function calculatePositionsMargins(positions: any[], apiKey: string): Promise<any[]> {
+    if (!kc || !currentAccessToken || positions.length === 0) {
+        // If no session or no positions, return positions without margins
+        return positions.map(p => ({ ...p, marginBlocked: null }));
+    }
+
+    try {
+        console.log(`Calculating margins for ${positions.length} positions using Kite Connect API`);
+        
+        // Filter out positions with zero quantity (no margin needed)
+        const nonZeroPositions = positions.filter(p => p.quantity !== 0);
+        
+        if (nonZeroPositions.length === 0) {
+            return positions.map(p => ({ ...p, marginBlocked: null }));
+        }
+
+        // Convert positions to order format for margin calculation API
+        // Reference: https://kite.trade/docs/connect/v3/margins/#order-margins
+        const orders = nonZeroPositions.map(position => {
+            // Use LIMIT order with current price if available, otherwise use MARKET
+            const hasPrice = position.lastPrice && position.lastPrice > 0;
+            return {
+                exchange: position.exchange,
+                tradingsymbol: position.tradingSymbol,
+                transaction_type: position.side, // BUY or SELL
+                variety: 'regular',
+                product: position.product || 'NRML', // Use position product or default to NRML
+                order_type: hasPrice ? 'LIMIT' : 'MARKET',
+                quantity: Math.abs(position.quantity),
+                price: hasPrice ? position.lastPrice : 0,
+                trigger_price: 0
+            };
+        });
+
+        // Call Kite Connect margin calculation API
+        // POST https://api.kite.trade/margins/orders
+        const apiUrl = `https://api.kite.trade/margins/orders`;
+        const authHeader = `token ${apiKey}:${currentAccessToken}`;
+        
+        const response = await axios.post(apiUrl, orders, {
+            headers: {
+                'X-Kite-Version': '3',
+                'Authorization': authHeader,
+                'Content-Type': 'application/json'
+            },
+            timeout: 30000 // 30 second timeout
+        });
+
+        if (response.data && response.data.status === 'success' && response.data.data) {
+            const marginResults = response.data.data;
+            
+            // Create a map of tradingSymbol to margin blocked
+            const marginMap = new Map<string, number>();
+            marginResults.forEach((result: any) => {
+                if (result.tradingsymbol && result.total !== undefined) {
+                    marginMap.set(result.tradingsymbol, parseFloat(result.total || 0));
+                }
+            });
+
+            // Add margin blocked to positions
+            const positionsWithMargins = positions.map(position => {
+                const marginBlocked = position.quantity !== 0 && marginMap.has(position.tradingSymbol)
+                    ? marginMap.get(position.tradingSymbol)!
+                    : null;
+                return {
+                    ...position,
+                    marginBlocked
+                };
+            });
+
+            console.log(`Successfully calculated margins for ${nonZeroPositions.length} positions`);
+            return positionsWithMargins;
+        } else {
+            console.warn('Margin calculation API returned unexpected response format:', response.data);
+            // Return positions without margins if API response is unexpected
+            return positions.map(p => ({ ...p, marginBlocked: null }));
+        }
+    } catch (error: any) {
+        console.error('Error calculating margins for positions:', error.message);
+        console.error('Error details:', error.response?.data || error.message);
+        // Return positions without margins if calculation fails
+        // This allows positions to still be saved even if margin calculation fails
+        return positions.map(p => ({ ...p, marginBlocked: null }));
+    }
 }
 
 // Export function to get margins
