@@ -15,6 +15,8 @@ import {
   CheckCircleIcon,
   ExclamationTriangleIcon,
   InformationCircleIcon,
+  ChevronDownIcon,
+  ChevronRightIcon,
 } from '@heroicons/react/24/outline';
 import Layout from '../components/Layout';
 import { getAccounts, createAccount, updateAccount, deleteAccount, syncAccount, syncAllAccounts, getLoginUrl, exchangeToken, type Account, type CreateAccountData, type UpdateAccountData } from '../services/accountsService';
@@ -40,6 +42,7 @@ export default function Accounts() {
   const [editingAccount, setEditingAccount] = useState<Account | null>(null);
   const [showApiKeys, setShowApiKeys] = useState(false);
   const [messages, setMessages] = useState<Message[]>([]);
+  const [expandedFamilies, setExpandedFamilies] = useState<Set<string>>(new Set());
   const [formData, setFormData] = useState<AccountFormData>({
     name: '',
     family: '',
@@ -251,6 +254,36 @@ export default function Accounts() {
     return key.substring(0, 4) + '...' + key.substring(key.length - 4);
   };
 
+  // Group accounts by family
+  const groupAccountsByFamily = () => {
+    if (!accounts) return new Map<string, Account[]>();
+    
+    const grouped = new Map<string, Account[]>();
+    accounts.forEach((account) => {
+      const family = account.family || 'Ungrouped';
+      if (!grouped.has(family)) {
+        grouped.set(family, []);
+      }
+      grouped.get(family)!.push(account);
+    });
+    
+    return grouped;
+  };
+
+  const toggleFamily = (family: string) => {
+    setExpandedFamilies((prev) => {
+      const newSet = new Set(prev);
+      if (newSet.has(family)) {
+        newSet.delete(family);
+      } else {
+        newSet.add(family);
+      }
+      return newSet;
+    });
+  };
+
+  const groupedAccounts = groupAccountsByFamily();
+
   return (
     <Layout>
       <div className="mb-6 flex justify-between items-center">
@@ -310,9 +343,6 @@ export default function Accounts() {
                   Account Name
                 </th>
                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                  Family
-                </th>
-                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
                   Last Sync
                 </th>
                 <th className="px-6 py-3 text-center text-xs font-medium text-gray-500 uppercase tracking-wider">
@@ -321,61 +351,86 @@ export default function Accounts() {
               </tr>
             </thead>
             <tbody className="bg-white divide-y divide-gray-200">
-              {accounts?.map((account) => (
-                <tr key={account.id} className="hover:bg-gray-50">
-                  <td className="px-6 py-4 whitespace-nowrap">
-                    <div className="text-sm font-medium text-gray-900">{account.name}</div>
-                  </td>
-                  <td className="px-6 py-4 whitespace-nowrap">
-                    <div className="text-sm text-gray-900">{account.family || '-'}</div>
-                  </td>
-                  <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
-                    {account.lastSync ? (
-                      <div>
-                        <div>{formatDate(account.lastSync)}</div>
-                        <div className="text-xs text-green-600">✓ Synced</div>
-                      </div>
-                    ) : (
-                      <div>
-                        <div>Never</div>
-                        <div className="text-xs text-gray-500">Not synced</div>
-                      </div>
-                    )}
-                  </td>
-                  <td className="px-6 py-4 whitespace-nowrap text-center text-sm font-medium">
-                     <button
-                       onClick={() => handleOpenDialog(account)}
-                       className="text-primary-600 hover:text-primary-900 mr-3"
-                       title="Edit Account"
-                     >
-                       <PencilIcon className="h-4 w-4" />
-                     </button>
-                     <button
-                       onClick={() => getLoginUrlMutation.mutate(account.id)}
-                       disabled={getLoginUrlMutation.isPending}
-                       className={`mr-3 ${getLoginUrlMutation.isPending ? 'text-gray-400 cursor-not-allowed' : 'text-blue-600 hover:text-blue-900'}`}
-                       title="Get Login URL"
-                     >
-                       <ArrowTopRightOnSquareIcon className={`h-4 w-4 ${getLoginUrlMutation.isPending ? 'animate-spin' : ''}`} />
-                     </button>
-                     <button
-                       onClick={() => syncAccountMutation.mutate({ id: account.id })}
-                       disabled={syncAccountMutation.isPending}
-                       className={`mr-3 ${syncAccountMutation.isPending ? 'text-gray-400 cursor-not-allowed' : 'text-green-600 hover:text-green-900'}`}
-                       title="Sync Holdings & Positions"
-                     >
-                       <ArrowPathIcon className={`h-4 w-4 ${syncAccountMutation.isPending ? 'animate-spin' : ''}`} />
-                     </button>
-                     <button
-                       onClick={() => handleDelete(account.id)}
-                       className="text-red-600 hover:text-red-900"
-                       title="Delete Account"
-                     >
-                       <TrashIcon className="h-4 w-4" />
-                     </button>
-                   </td>
-                </tr>
-              ))}
+              {Array.from(groupedAccounts.entries()).map(([family, familyAccounts]) => {
+                const isExpanded = expandedFamilies.has(family);
+                return (
+                  <Fragment key={family}>
+                    {/* Family Header Row */}
+                    <tr 
+                      className="bg-gray-100 hover:bg-gray-200 cursor-pointer"
+                      onClick={() => toggleFamily(family)}
+                    >
+                      <td className="px-6 py-4 whitespace-nowrap" colSpan={3}>
+                        <div className="flex items-center">
+                          {isExpanded ? (
+                            <ChevronDownIcon className="h-5 w-5 text-gray-600 mr-2" />
+                          ) : (
+                            <ChevronRightIcon className="h-5 w-5 text-gray-600 mr-2" />
+                          )}
+                          <span className="text-sm font-semibold text-gray-900">
+                            {family} ({familyAccounts.length} {familyAccounts.length === 1 ? 'account' : 'accounts'})
+                          </span>
+                        </div>
+                      </td>
+                    </tr>
+                    {/* Account Rows (shown when expanded) */}
+                    {isExpanded && familyAccounts.map((account) => (
+                      <tr key={account.id} className="hover:bg-gray-50">
+                        <td className="px-6 py-4 whitespace-nowrap pl-12">
+                          <div className="text-sm font-medium text-gray-900">{account.name}</div>
+                        </td>
+                        <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                          {account.lastSync ? (
+                            <div>
+                              <div>{formatDate(account.lastSync)}</div>
+                              <div className="text-xs text-green-600">✓ Synced</div>
+                            </div>
+                          ) : (
+                            <div>
+                              <div>Never</div>
+                              <div className="text-xs text-gray-500">Not synced</div>
+                            </div>
+                          )}
+                        </td>
+                        <td className="px-6 py-4 whitespace-nowrap text-center text-sm font-medium">
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              handleOpenDialog(account);
+                            }}
+                            className="text-primary-600 hover:text-primary-900 mr-3"
+                            title="Edit Account"
+                          >
+                            <PencilIcon className="h-4 w-4" />
+                          </button>
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              getLoginUrlMutation.mutate(account.id);
+                            }}
+                            disabled={getLoginUrlMutation.isPending}
+                            className={`mr-3 ${getLoginUrlMutation.isPending ? 'text-gray-400 cursor-not-allowed' : 'text-blue-600 hover:text-blue-900'}`}
+                            title="Get Login URL"
+                          >
+                            <ArrowTopRightOnSquareIcon className={`h-4 w-4 ${getLoginUrlMutation.isPending ? 'animate-spin' : ''}`} />
+                          </button>
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              syncAccountMutation.mutate({ id: account.id });
+                            }}
+                            disabled={syncAccountMutation.isPending}
+                            className={`mr-3 ${syncAccountMutation.isPending ? 'text-gray-400 cursor-not-allowed' : 'text-green-600 hover:text-green-900'}`}
+                            title="Sync Holdings & Positions"
+                          >
+                            <ArrowPathIcon className={`h-4 w-4 ${syncAccountMutation.isPending ? 'animate-spin' : ''}`} />
+                          </button>
+                        </td>
+                      </tr>
+                    ))}
+                  </Fragment>
+                );
+              })}
             </tbody>
           </table>
         </div>

@@ -220,6 +220,7 @@ model SymbolMargin {
   symbol       String
   margin       Float
   safetyMargin Float?   @map("safety_margin")
+  lotSize      Int?     @map("lot_size")
   symbolType   String   @default("equity") @map("symbol_type")
   createdAt    DateTime @default(now()) @map("created_at")
   updatedAt    DateTime @updatedAt @map("updated_at")

@@ -29,7 +29,7 @@ export default function Positions() {
   const [viewMode, setViewMode] = useState<'accounts' | 'positions'>('accounts');
   const [familyView, setFamilyView] = useState<boolean>(true); // Default to family view
   const [sortConfig, setSortConfig] = useState<{
-    key: keyof Position | 'remainingPnL' | null;
+    key: keyof Position | 'remainingPnL' | 'remainingProfitPercentage' | null;
     direction: 'asc' | 'desc';
   }>({ key: null, direction: 'asc' });
   const [expandedPositions, setExpandedPositions] = useState<Set<number>>(new Set());
@@ -112,6 +112,13 @@ export default function Positions() {
     if (marginBlocked <= 0) return '';
     const percentage = (Math.abs(value) / marginBlocked) * 100;
     return ` (${percentage.toFixed(1)}%)`;
+  };
+
+  // Helper function to get just the percentage value (without formatting)
+  const getMarginPercentageValue = (value: number, marginBlocked: number): number | null => {
+    if (marginBlocked <= 0) return null;
+    const percentage = (Math.abs(value) / marginBlocked) * 100;
+    return percentage;
   };
 
   const formatNumber = (num: number) => {
@@ -376,7 +383,7 @@ export default function Positions() {
     }
   }, [groupedFamilyPositions, groupedPositions, familyView, activeMonthTab]);
 
-  const handleSort = (key: keyof Position | 'remainingPnL') => {
+  const handleSort = (key: keyof Position | 'remainingPnL' | 'remainingProfitPercentage') => {
     setSortConfig(prevConfig => ({
       key: key,
       direction: prevConfig.key === key && prevConfig.direction === 'asc' ? 'desc' : 'asc'
@@ -395,6 +402,13 @@ export default function Positions() {
       if (sortConfig.key === 'remainingPnL') {
         aValue = -a.marketValue - a.pnl;
         bValue = -b.marketValue - b.pnl;
+      } else if (sortConfig.key === 'remainingProfitPercentage') {
+        const aMarginBlocked = a.marginBlocked || 0;
+        const bMarginBlocked = b.marginBlocked || 0;
+        const aRemainingPnL = -a.marketValue - a.pnl;
+        const bRemainingPnL = -b.marketValue - b.pnl;
+        aValue = aMarginBlocked > 0 ? (Math.abs(aRemainingPnL) / aMarginBlocked) * 100 : 0;
+        bValue = bMarginBlocked > 0 ? (Math.abs(bRemainingPnL) / bMarginBlocked) * 100 : 0;
       } else {
         aValue = a[sortConfig.key!];
         bValue = b[sortConfig.key!];
@@ -414,7 +428,7 @@ export default function Positions() {
     });
   }, [getCurrentMonthPositions, sortConfig]);
 
-  const getSortIcon = (key: keyof Position | 'remainingPnL') => {
+  const getSortIcon = (key: keyof Position | 'remainingPnL' | 'remainingProfitPercentage') => {
     if (sortConfig.key !== key) {
       return <ChevronUpIcon className="h-4 w-4 text-gray-400" />;
     }
@@ -1117,6 +1131,15 @@ export default function Positions() {
                       </th>
                       <th 
                         className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100"
+                        onClick={() => handleSort('remainingProfitPercentage')}
+                      >
+                        <div className="flex items-center">
+                          Remaining Profit %
+                          {getSortIcon('remainingProfitPercentage')}
+                        </div>
+                      </th>
+                      <th 
+                        className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100"
                         onClick={() => handleSort('marketValue')}
                       >
                         <div className="flex items-center">
@@ -1195,8 +1218,13 @@ export default function Positions() {
                           <td className="px-6 py-4 whitespace-nowrap text-sm">
                             <span className={getPnLColor(-position.marketValue - position.pnl)}>
                               {formatCurrency(-position.marketValue - position.pnl)}
-                              {getMarginPercentage(-position.marketValue - position.pnl, position.marginBlocked || 0)}
                             </span>
+                          </td>
+                          <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
+                            {(() => {
+                              const percentage = getMarginPercentageValue(-position.marketValue - position.pnl, position.marginBlocked || 0);
+                              return percentage !== null ? `${percentage.toFixed(1)}%` : 'N/A';
+                            })()}
                           </td>
                           <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
                             {formatCurrency(-position.marketValue)}
@@ -1245,8 +1273,15 @@ export default function Positions() {
                                     {account.marketValue !== undefined && account.pnl !== undefined ? (
                                       <span className={getPnLColor(-account.marketValue - account.pnl)}>
                                         {formatCurrency(-account.marketValue - account.pnl)}
-                                        {getMarginPercentage(-account.marketValue - account.pnl, account.marginBlocked || 0)}
                                       </span>
+                                    ) : 'N/A'}
+                                  </td>
+                                  <td className="px-6 py-3 whitespace-nowrap text-sm text-gray-600">
+                                    {account.marketValue !== undefined && account.pnl !== undefined ? (
+                                      (() => {
+                                        const percentage = getMarginPercentageValue(-account.marketValue - account.pnl, account.marginBlocked || 0);
+                                        return percentage !== null ? `${percentage.toFixed(1)}%` : 'N/A';
+                                      })()
                                     ) : 'N/A'}
                                   </td>
                                   <td className="px-6 py-3 whitespace-nowrap text-sm text-gray-600">
@@ -1297,8 +1332,13 @@ export default function Positions() {
                                 <td className="px-6 py-3 whitespace-nowrap text-sm text-gray-600">
                                   <span className={getPnLColor(-position.marketValue - position.pnl)}>
                                     {formatCurrency(-position.marketValue - position.pnl)}
-                                    {getMarginPercentage(-position.marketValue - position.pnl, position.marginBlocked || 0)}
                                   </span>
+                                </td>
+                                <td className="px-6 py-3 whitespace-nowrap text-sm text-gray-600">
+                                  {(() => {
+                                    const percentage = getMarginPercentageValue(-position.marketValue - position.pnl, position.marginBlocked || 0);
+                                    return percentage !== null ? `${percentage.toFixed(1)}%` : 'N/A';
+                                  })()}
                                 </td>
                                 <td className="px-6 py-3 whitespace-nowrap text-sm text-gray-600">
                                   {formatCurrency(-position.marketValue)}

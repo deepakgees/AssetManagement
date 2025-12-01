@@ -7,6 +7,7 @@ export interface SymbolMargin {
   symbol: string;
   margin: number;
   safetyMargin?: number;
+  lotSize?: number;
   symbolType: string;
   createdAt: string;
   updatedAt: string;
@@ -16,6 +17,7 @@ export interface CreateSymbolMarginData {
   symbol: string;
   margin: number;
   safetyMargin?: number;
+  lotSize?: number;
   symbolType: string;
 }
 
@@ -23,6 +25,7 @@ export interface UpdateSymbolMarginData {
   symbol: string;
   margin: number;
   safetyMargin?: number;
+  lotSize?: number;
   symbolType: string;
 }
 

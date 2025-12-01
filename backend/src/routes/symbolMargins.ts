@@ -152,20 +152,25 @@ router.post('/', [
     .optional()
     .isFloat({ min: 0, max: 100 })
     .withMessage('Safety margin must be a number between 0 and 100'),
+  body('lotSize')
+    .optional()
+    .isInt({ min: 1 })
+    .withMessage('Lot size must be a positive integer'),
   body('symbolType')
     .isString()
     .isIn(['equity', 'commodity', 'currency', 'debt'])
     .withMessage('Symbol type must be one of: equity, commodity, currency, debt')
 ], validateRequest, async (req, res) => {
   try {
-    const { symbol, margin, safetyMargin, symbolType } = req.body;
-    logger.info(`Creating new symbol margin record: ${symbol} with margin: ${margin}, safetyMargin: ${safetyMargin}, and type: ${symbolType}`);
+    const { symbol, margin, safetyMargin, lotSize, symbolType } = req.body;
+    logger.info(`Creating new symbol margin record: ${symbol} with margin: ${margin}, safetyMargin: ${safetyMargin}, lotSize: ${lotSize}, and type: ${symbolType}`);
     
     const record = await prisma.symbolMargin.create({
       data: {
         symbol,
         margin: parseFloat(margin),
         safetyMargin: safetyMargin ? parseFloat(safetyMargin) : null,
+        lotSize: lotSize ? parseInt(lotSize) : null,
         symbolType: symbolType || 'equity'
       }
     });
@@ -204,6 +209,10 @@ router.put('/:id', [
     .optional()
     .isFloat({ min: 0, max: 100 })
     .withMessage('Safety margin must be a number between 0 and 100'),
+  body('lotSize')
+    .optional()
+    .isInt({ min: 1 })
+    .withMessage('Lot size must be a positive integer'),
   body('symbolType')
     .isString()
     .isIn(['equity', 'commodity', 'currency', 'debt'])
@@ -211,8 +220,8 @@ router.put('/:id', [
 ], validateRequest, async (req, res) => {
   try {
     const { id } = req.params;
-    const { symbol, margin, safetyMargin, symbolType } = req.body;
-    logger.info(`Updating symbol margin record ID: ${id} with symbol: ${symbol}, margin: ${margin}, safetyMargin: ${safetyMargin}, and type: ${symbolType}`);
+    const { symbol, margin, safetyMargin, lotSize, symbolType } = req.body;
+    logger.info(`Updating symbol margin record ID: ${id} with symbol: ${symbol}, margin: ${margin}, safetyMargin: ${safetyMargin}, lotSize: ${lotSize}, and type: ${symbolType}`);
     
     // Check if record exists
     const existingRecord = await prisma.symbolMargin.findUnique({
@@ -230,6 +239,7 @@ router.put('/:id', [
         symbol,
         margin: parseFloat(margin),
         safetyMargin: safetyMargin ? parseFloat(safetyMargin) : null,
+        lotSize: lotSize !== undefined ? (lotSize ? parseInt(lotSize) : null) : undefined,
         symbolType: symbolType || 'equity'
       }
     });
