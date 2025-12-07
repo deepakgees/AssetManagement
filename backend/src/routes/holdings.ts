@@ -34,6 +34,71 @@ router.get('/', async (req: Request, res: Response) => {
   }
 });
 
+// Get unmapped holdings
+router.get('/unmapped', async (req: Request, res: Response) => {
+  try {
+    const { accountId } = req.query;
+
+    const whereClause: any = {};
+    if (accountId) {
+      whereClause.accountId = parseInt(accountId as string);
+    }
+
+    // Get all holdings and mutual fund holdings
+    const [holdings, mutualFundHoldings] = await Promise.all([
+      prisma.holding.findMany({
+        where: whereClause,
+        include: {
+          account: {
+            select: {
+              id: true,
+              name: true,
+            },
+          },
+        },
+      }),
+      prisma.mutualFundHolding.findMany({
+        where: whereClause,
+        include: {
+          account: {
+            select: {
+              id: true,
+              name: true,
+            },
+          },
+        },
+      }),
+    ]);
+
+    // Get all category mappings
+    const categoryMappings = await prisma.holdingCategoryMapping.findMany();
+    const categoryMap = new Map<string, string>();
+    categoryMappings.forEach(mapping => {
+      const key = `${mapping.tradingSymbol}_${mapping.holdingType}`;
+      categoryMap.set(key, mapping.category);
+    });
+
+    // Filter unmapped holdings
+    const unmappedEquityHoldings = holdings.filter(holding => {
+      const key = `${holding.tradingSymbol}_equity`;
+      return !categoryMap.has(key);
+    });
+
+    const unmappedMutualFundHoldings = mutualFundHoldings.filter(mfHolding => {
+      const key = `${mfHolding.tradingSymbol}_mutual_fund`;
+      return !categoryMap.has(key);
+    });
+
+    res.json({
+      equityHoldings: unmappedEquityHoldings,
+      mutualFundHoldings: unmappedMutualFundHoldings,
+    });
+  } catch (error) {
+    console.error('Get unmapped holdings error:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
 // Get holdings summary
 router.get('/summary', async (req: Request, res: Response) => {
   try {
@@ -45,22 +110,46 @@ router.get('/summary', async (req: Request, res: Response) => {
       whereClause.accountId = parseInt(accountId as string);
     }
 
-    const holdings = await prisma.holding.findMany({
-      where: whereClause,
-      include: {
-        account: {
-          select: {
-            id: true,
-            name: true,
+    // Get equity holdings and mutual fund holdings in parallel
+    const [holdings, mutualFundHoldings] = await Promise.all([
+      prisma.holding.findMany({
+        where: whereClause,
+        include: {
+          account: {
+            select: {
+              id: true,
+              name: true,
+            },
           },
         },
-      },
-    });
+      }),
+      prisma.mutualFundHolding.findMany({
+        where: whereClause,
+        include: {
+          account: {
+            select: {
+              id: true,
+              name: true,
+            },
+          },
+        },
+      }),
+    ]);
 
-    // Calculate summary
-    const totalMarketValue = holdings.reduce((sum, h) => sum + h.marketValue, 0);
-    const totalPnL = holdings.reduce((sum, h) => sum + h.pnl, 0);
-    const totalInvestment = holdings.reduce((sum, h) => sum + (h.averagePrice * (h.quantity + (h.collateralQuantity || 0))), 0);
+    // Calculate equity holdings summary
+    const equityMarketValue = holdings.reduce((sum, h) => sum + h.marketValue, 0);
+    const equityPnL = holdings.reduce((sum, h) => sum + h.pnl, 0);
+    const equityInvestment = holdings.reduce((sum, h) => sum + (h.averagePrice * (h.quantity + (h.collateralQuantity || 0))), 0);
+
+    // Calculate mutual fund holdings summary
+    const mfMarketValue = mutualFundHoldings.reduce((sum, mf) => sum + (mf.lastPrice * mf.quantity), 0);
+    const mfPnL = mutualFundHoldings.reduce((sum, mf) => sum + mf.pnl, 0);
+    const mfInvestment = mutualFundHoldings.reduce((sum, mf) => sum + (mf.averagePrice * mf.quantity), 0);
+
+    // Combined totals
+    const totalMarketValue = equityMarketValue + mfMarketValue;
+    const totalPnL = equityPnL + mfPnL;
+    const totalInvestment = equityInvestment + mfInvestment;
     const totalPnLPercentage = totalInvestment > 0 ? (totalPnL / totalInvestment) * 100 : 0;
 
     // Group by sector
@@ -74,16 +163,52 @@ router.get('/summary', async (req: Request, res: Response) => {
       return acc;
     }, {} as Record<string, { value: number; count: number }>);
 
+    // Get category mappings
+    const categoryMappings = await prisma.holdingCategoryMapping.findMany();
+    const categoryMap = new Map<string, string>();
+    categoryMappings.forEach(mapping => {
+      const key = `${mapping.tradingSymbol}_${mapping.holdingType}`;
+      categoryMap.set(key, mapping.category);
+    });
+
+    // Calculate category breakup - only use categories from mappings, "Unmapped" for others
+    // Track both market value and invested amount per category
+    const categoryBreakdown: Record<string, { marketValue: number; investedAmount: number }> = {};
+
+    // Process equity holdings
+    holdings.forEach(holding => {
+      const key = `${holding.tradingSymbol}_equity`;
+      const category = categoryMap.get(key) || 'Unmapped';
+      if (!categoryBreakdown[category]) {
+        categoryBreakdown[category] = { marketValue: 0, investedAmount: 0 };
+      }
+      categoryBreakdown[category].marketValue += holding.marketValue;
+      categoryBreakdown[category].investedAmount += (holding.averagePrice * (holding.quantity + (holding.collateralQuantity || 0)));
+    });
+
+    // Process mutual fund holdings
+    mutualFundHoldings.forEach(mfHolding => {
+      const key = `${mfHolding.tradingSymbol}_mutual_fund`;
+      const category = categoryMap.get(key) || 'Unmapped';
+      if (!categoryBreakdown[category]) {
+        categoryBreakdown[category] = { marketValue: 0, investedAmount: 0 };
+      }
+      categoryBreakdown[category].marketValue += (mfHolding.lastPrice * mfHolding.quantity);
+      categoryBreakdown[category].investedAmount += (mfHolding.averagePrice * mfHolding.quantity);
+    });
+
     res.json({
       summary: {
-        totalHoldings: holdings.length,
+        totalHoldings: holdings.length + mutualFundHoldings.length,
         totalMarketValue,
         totalPnL,
         totalPnLPercentage,
         totalInvestment,
       },
       sectorBreakdown,
+      categoryBreakdown,
       holdings,
+      mutualFundHoldings,
     });
   } catch (error) {
     console.error('Get holdings summary error:', error);

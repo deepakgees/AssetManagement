@@ -51,7 +51,9 @@ export interface HoldingsSummary {
     totalInvestment: number;
   };
   sectorBreakdown: Record<string, { value: number; count: number }>;
+  categoryBreakdown?: Record<string, number | { marketValue: number; investedAmount: number }>;
   holdings: Holding[];
+  mutualFundHoldings?: any[];
 }
 
 // Get all holdings (database)
@@ -83,4 +85,14 @@ export const updateHolding = async (id: number, holdingData: UpdateHoldingData):
 // Delete a holding
 export const deleteHolding = async (id: number): Promise<void> => {
   await api.delete(`/holdings/${id}`);
+};
+
+// Get unmapped holdings
+export const getUnmappedHoldings = async (accountId?: number): Promise<{
+  equityHoldings: Holding[];
+  mutualFundHoldings: any[];
+}> => {
+  const params = accountId ? `?accountId=${accountId}` : '';
+  const response = await api.get(`/holdings/unmapped${params}`);
+  return response.data;
 };

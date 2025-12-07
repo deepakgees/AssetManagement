@@ -4,7 +4,7 @@ import { prisma } from '../index';
 import logger from '../utils/logger';
 import { serviceLogger } from '../utils/serviceLogger';
 import { KiteConnect } from 'kiteconnect';
-import { generateSession, syncHoldings, syncPositions, initializeKiteConnect, setAccessToken, syncMargins } from '../../services/ZerodhaService';
+import { generateSession, syncHoldings, syncPositions, initializeKiteConnect, setAccessToken, syncMargins, syncMutualFundHoldings } from '../../services/ZerodhaService';
 import { generateTOTPWithInfo } from '../utils/totp-generator';
 import zerodhaLoginBot from '../utils/zerodhaLoginBot';
 
@@ -31,6 +31,10 @@ async function syncAccountData(account: any): Promise<{ success: boolean; error?
     // Sync margins using zerodha service
     await syncMargins(account);
     console.log(`✅ Margins synced for account: ${account.name}`);
+
+    // Sync mutual fund holdings using zerodha service
+    await syncMutualFundHoldings(account);
+    console.log(`✅ Mutual fund holdings synced for account: ${account.name}`);
 
     // Update account's last sync time
     await prisma.account.update({
@@ -394,8 +398,27 @@ router.post('/:id/sync', async (req: Request, res: Response) => {
       throw authError;
     }
 
+    // Get counts after sync
+    const [holdingsCount, positionsCount, mutualFundHoldingsCount] = await Promise.all([
+      prisma.holding.count({ where: { accountId: existingAccount.id } }),
+      prisma.position.count({ where: { accountId: existingAccount.id } }),
+      prisma.mutualFundHolding.count({ where: { accountId: existingAccount.id } })
+    ]);
+
+    // Get updated account with lastSync
+    const updatedAccount = await prisma.account.findFirst({
+      where: { id: existingAccount.id },
+      select: { lastSync: true }
+    });
+
     res.json({
-      message: 'Account synced successfully'
+      message: 'Account synced successfully',
+      summary: {
+        holdingsCount,
+        positionsCount,
+        mutualFundHoldingsCount,
+        lastSync: updatedAccount?.lastSync?.toISOString() || new Date().toISOString()
+      }
     });
   } catch (error) {
     console.error('Sync account error:', error);

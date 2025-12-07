@@ -8,6 +8,7 @@ import {
   EyeIcon,
   UserIcon,
 } from '@heroicons/react/24/outline';
+import { PieChart, Pie, Cell, ResponsiveContainer, Legend, Tooltip } from 'recharts';
 import Layout from '../components/Layout';
 import { getHoldings, getHoldingsSummary } from '../services/holdingsService';
 import { getAccounts, type Account } from '../services/accountsService';
@@ -52,6 +53,7 @@ export default function FamilyDetails() {
       let totalInvestment = 0;
       const allFamilyHoldings: any[] = [];
       const sectorBreakdown: Record<string, { value: number; count: number }> = {};
+      const categoryBreakdown: Record<string, { marketValue: number; investedAmount: number }> = {}; // Dynamic categories from mappings
       
       summaries.forEach((accountSummary) => {
         if (accountSummary?.summary) {
@@ -75,6 +77,22 @@ export default function FamilyDetails() {
               sectorBreakdown[sector].count += data.count;
             });
           }
+
+          // Aggregate category breakdown - include all categories dynamically
+          if (accountSummary.categoryBreakdown) {
+            Object.entries(accountSummary.categoryBreakdown).forEach(([category, value]) => {
+              if (!categoryBreakdown[category]) {
+                categoryBreakdown[category] = { marketValue: 0, investedAmount: 0 };
+              }
+              // Handle both old structure (number) and new structure (object)
+              if (typeof value === 'object' && value !== null && 'marketValue' in value && 'investedAmount' in value) {
+                categoryBreakdown[category].marketValue += (value as any).marketValue || 0;
+                categoryBreakdown[category].investedAmount += (value as any).investedAmount || 0;
+              } else if (typeof value === 'number') {
+                categoryBreakdown[category].marketValue += value || 0;
+              }
+            });
+          }
         }
       });
       
@@ -89,6 +107,7 @@ export default function FamilyDetails() {
           totalInvestment,
         },
         sectorBreakdown,
+        categoryBreakdown,
         holdings: allFamilyHoldings,
       };
     },
@@ -145,58 +164,176 @@ export default function FamilyDetails() {
       );
     }
 
+    // Prepare category breakdown data for pie chart - use all categories from backend
+    const categoryBreakdown = data.categoryBreakdown || {};
+    
+    // Convert category keys to display names and create pie chart data
+    const categoryDisplayNames: Record<string, string> = {
+      'equity': 'Equity',
+      'liquid_fund': 'Liquid Fund',
+      'gold': 'Gold',
+      'silver': 'Silver',
+      'Unmapped': 'Unmapped',
+    };
+    
+    // Type for pie chart data
+    type PieChartDataItem = {
+      name: string;
+      value: number;
+      investedAmount: number;
+      originalCategory: string;
+    };
+    
+    // Helper to check if value is the new structure (object) or old structure (number)
+    const isNewStructure = (value: any): value is { marketValue: number; investedAmount: number } => {
+      return typeof value === 'object' && value !== null && 'marketValue' in value && 'investedAmount' in value;
+    };
+    
+    const pieChartData: PieChartDataItem[] = Object.entries(categoryBreakdown)
+      .filter(([_, value]) => {
+        if (isNewStructure(value)) {
+          return value.marketValue > 0;
+        }
+        return typeof value === 'number' && value > 0;
+      })
+      .map(([category, value]) => {
+        const marketValue = isNewStructure(value) ? value.marketValue : (value as number);
+        const investedAmount = isNewStructure(value) ? value.investedAmount : 0;
+        return {
+          name: categoryDisplayNames[category] || category,
+          value: marketValue,
+          investedAmount: investedAmount,
+          originalCategory: category,
+        };
+      })
+      .sort((a, b) => b.value - a.value); // Sort by market value descending
+
+    const COLORS = ['#3B82F6', '#10B981', '#F59E0B', '#8B5CF6', '#EF4444', '#06B6D4', '#84CC16', '#F97316'];
+    const categoryColors: Record<string, string> = {
+      'equity': '#3B82F6',
+      'liquid_fund': '#10B981',
+      'gold': '#F59E0B',
+      'silver': '#8B5CF6',
+      'Unmapped': '#EF4444', // Red color for unmapped
+    };
+
     return (
       <div className="space-y-6">
-        {/* Portfolio Overview Card */}
-        <div className="bg-white border border-gray-200 rounded-lg shadow-sm p-6">
-          <h3 className="text-lg font-semibold text-gray-900 mb-6">Portfolio Overview</h3>
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-            {/* Invested Amount */}
-            <div className="flex items-start space-x-4">
-              <div className="flex-shrink-0">
-                <div className="w-12 h-12 bg-blue-100 rounded-lg flex items-center justify-center">
-                  <CurrencyDollarIcon className="h-6 w-6 text-blue-600" />
+        {/* Holdings Card */}
+        {pieChartData.length > 0 && (
+          <div className="bg-white border border-gray-200 rounded-lg shadow-sm p-6">
+            <h3 className="text-lg font-semibold text-gray-900 mb-6">Holdings</h3>
+            <div className="flex flex-col md:flex-row items-center justify-center gap-8">
+              <div className="w-full md:w-1/2">
+                <ResponsiveContainer width="100%" height={300}>
+                  <PieChart>
+                    <Pie
+                      data={pieChartData}
+                      cx="50%"
+                      cy="50%"
+                      labelLine={false}
+                      label={({ name, percent }) => `${name}: ${(percent * 100).toFixed(1)}%`}
+                      outerRadius={100}
+                      fill="#8884d8"
+                      dataKey="value"
+                    >
+                      {pieChartData.map((entry, index) => (
+                        <Cell key={`cell-${index}`} fill={categoryColors[entry.originalCategory] || COLORS[index % COLORS.length]} />
+                      ))}
+                    </Pie>
+                    <Tooltip 
+                      formatter={(value: number) => formatCurrency(value)}
+                    />
+                  </PieChart>
+                </ResponsiveContainer>
+              </div>
+              <div className="w-full md:w-1/2">
+                <div className="overflow-x-auto">
+                  <table className="min-w-full divide-y divide-gray-200">
+                    <thead className="bg-gray-50">
+                      <tr>
+                        <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                          Instrument
+                        </th>
+                        <th className="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">
+                          Invested Amount
+                        </th>
+                        <th className="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">
+                          Current Value
+                        </th>
+                      </tr>
+                    </thead>
+                    <tbody className="bg-white divide-y divide-gray-200">
+                      {pieChartData.map((item, index) => {
+                        const investedPercentage = data.summary?.totalInvestment 
+                          ? ((item.investedAmount / data.summary.totalInvestment) * 100).toFixed(2)
+                          : '0.00';
+                        const currentValuePercentage = data.summary?.totalMarketValue 
+                          ? ((item.value / data.summary.totalMarketValue) * 100).toFixed(2)
+                          : '0.00';
+                        return (
+                          <tr key={item.name} className="hover:bg-gray-50">
+                            <td className="px-4 py-3 whitespace-nowrap">
+                              <div className="flex items-center space-x-2">
+                                <div 
+                                  className="w-3 h-3 rounded-full" 
+                                  style={{ backgroundColor: categoryColors[item.originalCategory] || COLORS[index % COLORS.length] }}
+                                ></div>
+                                <span className="text-sm font-medium text-gray-900">{item.name}</span>
+                              </div>
+                            </td>
+                            <td className="px-4 py-3 whitespace-nowrap text-right">
+                              <div className="text-sm font-medium text-gray-900">
+                                {formatCurrency(item.investedAmount)}
+                              </div>
+                              <div className="text-xs text-gray-500">
+                                {investedPercentage}%
+                              </div>
+                            </td>
+                            <td className="px-4 py-3 whitespace-nowrap text-right">
+                              <div className="text-sm font-medium text-gray-900">
+                                {formatCurrency(item.value)}
+                              </div>
+                              <div className="text-xs text-gray-500">
+                                {currentValuePercentage}%
+                              </div>
+                            </td>
+                          </tr>
+                        );
+                      })}
+                      {/* Total Row */}
+                      <tr className="bg-gray-50 border-t-2 border-gray-300">
+                        <td className="px-4 py-3 whitespace-nowrap">
+                          <span className="text-sm font-bold text-gray-900">Total</span>
+                        </td>
+                        <td className="px-4 py-3 whitespace-nowrap text-right">
+                          <div className="text-sm font-bold text-gray-900">
+                            {formatCurrency(
+                              pieChartData.reduce((sum, item) => sum + item.investedAmount, 0)
+                            )}
+                          </div>
+                          <div className="text-xs text-gray-500">
+                            100.00%
+                          </div>
+                        </td>
+                        <td className="px-4 py-3 whitespace-nowrap text-right">
+                          <div className="text-sm font-bold text-gray-900">
+                            {formatCurrency(
+                              pieChartData.reduce((sum, item) => sum + item.value, 0)
+                            )}
+                          </div>
+                          <div className="text-xs text-gray-500">
+                            100.00%
+                          </div>
+                        </td>
+                      </tr>
+                    </tbody>
+                  </table>
                 </div>
-              </div>
-              <div className="flex-1">
-                <p className="text-sm font-medium text-gray-500 mb-1">Invested Amount</p>
-                <p className="text-2xl font-bold text-gray-900">
-                  {formatCurrency(data.summary?.totalInvestment || 0)}
-                </p>
-              </div>
-            </div>
-
-            {/* Current Value */}
-            <div className="flex items-start space-x-4">
-              <div className="flex-shrink-0">
-                <div className="w-12 h-12 bg-green-100 rounded-lg flex items-center justify-center">
-                  <CurrencyDollarIcon className="h-6 w-6 text-green-600" />
-                </div>
-              </div>
-              <div className="flex-1">
-                <p className="text-sm font-medium text-gray-500 mb-1">Current Value</p>
-                <p className="text-2xl font-bold text-gray-900">
-                  {formatCurrency(data.summary?.totalMarketValue || 0)}
-                </p>
-              </div>
-            </div>
-
-            {/* No of holdings */}
-            <div className="flex items-start space-x-4">
-              <div className="flex-shrink-0">
-                <div className="w-12 h-12 bg-purple-100 rounded-lg flex items-center justify-center">
-                  <ChartBarIcon className="h-6 w-6 text-purple-600" />
-                </div>
-              </div>
-              <div className="flex-1">
-                <p className="text-sm font-medium text-gray-500 mb-1">No of holdings</p>
-                <p className="text-2xl font-bold text-gray-900">
-                  {data.summary?.totalHoldings || 0}
-                </p>
               </div>
             </div>
           </div>
-        </div>
+        )}
       </div>
     );
   };

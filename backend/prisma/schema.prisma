@@ -31,6 +31,7 @@ model Account {
   pnlRecords       PnLRecord[]
   snapshots        PortfolioSnapshot[]
   positions        Position[]
+  mutualFundHoldings MutualFundHolding[]
 
   @@map("accounts")
 }
@@ -232,22 +233,33 @@ model SymbolMargin {
   @@map("symbol_margins")
 }
 
-model safety_margins {
-  id           Int      @id @default(autoincrement())
-  symbol       String
-  safetyMargin Float
-  type         String   @default("commodity")
-  createdAt    DateTime @default(now())
-  updatedAt    DateTime
+model MutualFundHolding {
+  id              Int      @id @default(autoincrement())
+  folio           String?
+  fund            String
+  tradingSymbol   String
+  averagePrice    Float
+  lastPrice       Float
+  lastPriceDate   DateTime?
+  pledgedQuantity Float?
+  pnl             Float
+  quantity        Float
+  accountId       Int
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+  account         Account  @relation(fields: [accountId], references: [id], onDelete: Cascade)
 
-  @@unique([symbol, type], map: "unique_safety_margin_symbol_type")
+  @@map("mutual_fund_holdings")
 }
 
-model symbol_and_margins {
-  id           Int      @id @default(autoincrement())
-  symbolPrefix String   @unique
-  margin       Float
-  symbolType   String   @default("equity")
-  createdAt    DateTime @default(now())
-  updatedAt    DateTime
+model HoldingCategoryMapping {
+  id              Int      @id @default(autoincrement())
+  tradingSymbol   String
+  holdingType     String   // 'equity' or 'mutual_fund'
+  category        String   // 'equity', 'liquid_fund', 'gold', 'silver'
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  @@unique([tradingSymbol, holdingType], name: "unique_holding_category")
+  @@map("holding_category_mappings")
 }

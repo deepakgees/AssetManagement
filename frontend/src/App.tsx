@@ -9,6 +9,7 @@ import Dividends from './pages/Dividends';
 import SymbolMargins from './pages/SymbolMargins';
 import HistoricalData from './pages/HistoricalData';
 import FamilyDetails from './pages/FamilyDetails';
+import HoldingCategoryMapping from './pages/HoldingCategoryMapping';
 
 // Create React Query client
 const queryClient = new QueryClient({
@@ -35,6 +36,7 @@ function App() {
             <Route path="/symbolMargins" element={<SymbolMargins />} />
             <Route path="/historicalData" element={<HistoricalData />} />
             <Route path="/family/:familyName" element={<FamilyDetails />} />
+            <Route path="/holdingCategoryMapping" element={<HoldingCategoryMapping />} />
           </Routes>
         </div>
       </Router>

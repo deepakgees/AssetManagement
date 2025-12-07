@@ -39,6 +39,7 @@ const Layout: React.FC<LayoutProps> = ({ children }) => {
       children: [
         { name: 'Symbol & Margins', href: '/symbolMargins', icon: TagIcon },
         { name: 'Historical Data', href: '/historicalData', icon: ClockIcon },
+        { name: 'Holding Category Mapping', href: '/holdingCategoryMapping', icon: TagIcon },
       ]
     },
     { 

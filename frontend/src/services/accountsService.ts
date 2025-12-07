@@ -96,6 +96,7 @@ export const syncAccount = async (id: number, accessToken?: string): Promise<{
   summary: {
     holdingsCount: number;
     positionsCount: number;
+    mutualFundHoldingsCount: number;
     holdingsSummary: any;
     positionsSummary: any;
     lastSync: string;

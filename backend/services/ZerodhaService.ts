@@ -581,6 +581,79 @@ export async function syncMargins(existingAccount: any) {
     }, existingAccount);
 }
 
+// Export function to sync mutual fund holdings with retry mechanism
+export async function syncMutualFundHoldings(existingAccount: any) {
+    return executeWithRetry(async () => {
+        console.log('Fetching mutual fund holdings for account:', existingAccount.id);
+        
+        // Validate session before making API call
+        if (!kc || !currentAccessToken || !currentApiKey) {
+            throw new Error('Session not initialized. Please login again.');
+        }
+        
+        // Call Kite API for mutual fund holdings
+        // Reference: https://kite.trade/docs/connect/v3/mutual-funds/#holdings
+        const apiUrl = `https://api.kite.trade/mf/holdings`;
+        const authHeader = `token ${currentApiKey}:${currentAccessToken}`;
+        
+        const response = await axios.get(apiUrl, {
+            headers: {
+                'X-Kite-Version': '3',
+                'Authorization': authHeader,
+                'Content-Type': 'application/json'
+            },
+            timeout: 30000 // 30 second timeout
+        });
+
+        if (response.data && response.data.status === 'success' && response.data.data) {
+            const mfHoldings = response.data.data;
+            console.log(`Raw mutual fund holdings data: ${mfHoldings.length} holdings found`);
+            
+            let mfHoldingsData: any[] = [];
+            mfHoldingsData = mfHoldings.map((holding: any) => ({
+                folio: holding.folio || null,
+                fund: holding.fund || '',
+                tradingSymbol: holding.tradingsymbol || '',
+                averagePrice: parseFloat(holding.average_price || 0),
+                lastPrice: parseFloat(holding.last_price || 0),
+                lastPriceDate: holding.last_price_date ? new Date(holding.last_price_date) : null,
+                pledgedQuantity: holding.pledged_quantity ? parseFloat(holding.pledged_quantity) : null,
+                pnl: parseFloat(holding.pnl || 0),
+                quantity: parseFloat(holding.quantity || 0),
+                accountId: existingAccount.id,
+            }));
+            
+            // Clear existing mutual fund holdings for this account
+            await prisma.mutualFundHolding.deleteMany({
+                where: { accountId: existingAccount.id }
+            });
+            
+            // Insert new mutual fund holdings
+            if (mfHoldingsData.length > 0) {
+                try {
+                    console.log(`Inserting ${mfHoldingsData.length} mutual fund holdings for account ${existingAccount.id}`);
+                    await prisma.mutualFundHolding.createMany({
+                        data: mfHoldingsData,
+                        skipDuplicates: true // Skip duplicates to avoid constraint errors
+                    });
+                    console.log(`Successfully inserted ${mfHoldingsData.length} mutual fund holdings`);
+                } catch (dbError: any) {
+                    console.error('Database error while inserting mutual fund holdings:', dbError.message);
+                    console.error('Sample mutual fund holdings data:', mfHoldingsData.slice(0, 2));
+                    throw new Error(`Database Error: ${dbError.message}`);
+                }
+            }
+            
+            console.log(`Successfully synced ${mfHoldingsData.length} mutual fund holdings for account ${existingAccount.id}`);
+            return mfHoldings;
+        } else {
+            console.warn('Mutual fund holdings API returned unexpected response format:', response.data);
+            // Return empty array if API response is unexpected
+            return [];
+        }
+    }, existingAccount);
+}
+
 // Export function to get instruments
 export async function getInstruments(apiKey: string, requestToken: string, apiSecret: string, segment?: string) {
     try {

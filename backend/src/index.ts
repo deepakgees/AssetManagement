@@ -18,6 +18,7 @@ import dividendRoutes from './routes/dividends';
 import symbolMarginsRoutes from './routes/symbolMargins';
 import fundTransactionRoutes from './routes/fundTransactions';
 import historicalDataRoutes from './routes/historicalData';
+import holdingCategoryMappingsRoutes from './routes/holdingCategoryMappings';
 
 // Load environment variables
 dotenv.config();
@@ -58,6 +59,7 @@ app.get('/api/health', (req, res) => {
 // API routes
 app.use('/api/accounts', accountRoutes);
 app.use('/api/holdings', holdingsRoutes);
+app.use('/api/holdingCategoryMappings', holdingCategoryMappingsRoutes);
 app.use('/api/positions', positionsRoutes);
 app.use('/api/portfolio', portfolioRoutes);
 app.use('/api/margins', marginsRoutes);
