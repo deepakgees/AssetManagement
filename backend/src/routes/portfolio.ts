@@ -48,7 +48,7 @@ router.get('/overview', async (req: Request, res: Response) => {
 
     const totalValue = holdingsValue + positionsValue;
     const totalPnL = holdingsPnL + positionsPnL;
-    const totalInvestment = holdings.reduce((sum, h) => sum + (h.averagePrice * h.quantity), 0) +
+    const totalInvestment = holdings.reduce((sum, h) => sum + (h.averagePrice * (h.quantity + (h.collateralQuantity || 0))), 0) +
                            positions.reduce((sum, p) => sum + (p.averagePrice * p.quantity), 0);
     const totalPnLPercentage = totalInvestment > 0 ? (totalPnL / totalInvestment) * 100 : 0;
 

@@ -60,7 +60,7 @@ router.get('/summary', async (req: Request, res: Response) => {
     // Calculate summary
     const totalMarketValue = holdings.reduce((sum, h) => sum + h.marketValue, 0);
     const totalPnL = holdings.reduce((sum, h) => sum + h.pnl, 0);
-    const totalInvestment = holdings.reduce((sum, h) => sum + (h.averagePrice * h.quantity), 0);
+    const totalInvestment = holdings.reduce((sum, h) => sum + (h.averagePrice * (h.quantity + (h.collateralQuantity || 0))), 0);
     const totalPnLPercentage = totalInvestment > 0 ? (totalPnL / totalInvestment) * 100 : 0;
 
     // Group by sector

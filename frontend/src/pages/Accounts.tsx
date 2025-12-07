@@ -3,6 +3,7 @@ import { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { Dialog, Transition } from '@headlessui/react';
 import { Fragment } from 'react';
+import { useNavigate } from 'react-router-dom';
 import {
   PlusIcon,
   PencilIcon,
@@ -38,6 +39,7 @@ interface AccountFormData {
 }
 
 export default function Accounts() {
+  const navigate = useNavigate();
   const [openDialog, setOpenDialog] = useState(false);
   const [editingAccount, setEditingAccount] = useState<Account | null>(null);
   const [showApiKeys, setShowApiKeys] = useState(false);
@@ -357,19 +359,34 @@ export default function Accounts() {
                   <Fragment key={family}>
                     {/* Family Header Row */}
                     <tr 
-                      className="bg-gray-100 hover:bg-gray-200 cursor-pointer"
-                      onClick={() => toggleFamily(family)}
+                      className="bg-gray-100 hover:bg-gray-200"
                     >
                       <td className="px-6 py-4 whitespace-nowrap" colSpan={3}>
-                        <div className="flex items-center">
-                          {isExpanded ? (
-                            <ChevronDownIcon className="h-5 w-5 text-gray-600 mr-2" />
-                          ) : (
-                            <ChevronRightIcon className="h-5 w-5 text-gray-600 mr-2" />
-                          )}
-                          <span className="text-sm font-semibold text-gray-900">
-                            {family} ({familyAccounts.length} {familyAccounts.length === 1 ? 'account' : 'accounts'})
-                          </span>
+                        <div className="flex items-center justify-between">
+                          <div 
+                            className="flex items-center cursor-pointer flex-1"
+                            onClick={() => toggleFamily(family)}
+                          >
+                            {isExpanded ? (
+                              <ChevronDownIcon className="h-5 w-5 text-gray-600 mr-2" />
+                            ) : (
+                              <ChevronRightIcon className="h-5 w-5 text-gray-600 mr-2" />
+                            )}
+                            <span className="text-sm font-semibold text-gray-900">
+                              {family} ({familyAccounts.length} {familyAccounts.length === 1 ? 'account' : 'accounts'})
+                            </span>
+                          </div>
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              navigate(`/family/${encodeURIComponent(family)}`);
+                            }}
+                            className="inline-flex items-center px-3 py-1.5 border border-transparent text-sm font-medium rounded-md text-white bg-primary-600 hover:bg-primary-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-primary-500 ml-4"
+                            title="View Family Details"
+                          >
+                            <EyeIcon className="h-4 w-4 mr-1" />
+                            View details
+                          </button>
                         </div>
                       </td>
                     </tr>
