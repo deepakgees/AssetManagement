@@ -4,7 +4,8 @@
   "description": "Backend for Asset Management",
   "main": "dist/index.js",
   "scripts": {
-    "dev": "nodemon --config nodemon.json",
+    "kill-port": "node scripts/kill-port.js",
+    "dev": "npm run kill-port && nodemon --config nodemon.json",
     "dev:direct": "ts-node src/index.ts",
     "debug": "node --inspect --require ts-node/register src/index.ts",
     "debug-brk": "node --inspect-brk --require ts-node/register src/index.ts",
