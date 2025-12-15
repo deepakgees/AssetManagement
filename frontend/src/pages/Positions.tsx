@@ -133,6 +133,28 @@ export default function Positions() {
     return pnl >= 0 ? 'text-green-600' : 'text-red-600';
   };
 
+  // Helper function to format profit display with color coding
+  const formatProfitDisplay = (currentProfit: number, remainingProfit: number) => {
+    const totalProfit = currentProfit + remainingProfit;
+    const formatValue = (value: number) => {
+      // Format without currency symbol, just the number
+      return new Intl.NumberFormat('en-IN', {
+        minimumFractionDigits: 0,
+        maximumFractionDigits: 0,
+      }).format(value);
+    };
+    
+    return (
+      <span className="text-sm">
+        <span className="text-green-600 font-medium">{formatValue(currentProfit)}</span>
+        <span className="text-gray-600 mx-1">+</span>
+        <span className="text-blue-600 font-medium">{formatValue(remainingProfit)}</span>
+        <span className="text-gray-600 mx-1">=</span>
+        <span className="text-gray-900 font-semibold">{formatValue(totalProfit)}</span>
+      </span>
+    );
+  };
+
 
   // Function to get row background color based on price difference
   const getRowBackgroundColor = (position: Position) => {
@@ -221,30 +243,56 @@ export default function Positions() {
     setActiveMonthTab(''); // Clear active tab
   };
 
-  // Get current month's positions
+  // Get current month's positions filtered by PE/CE
   const getCurrentMonthPositions = () => {
     if (activeMonthTab === 'Overview') {
       return positions || [];
     }
+    
+    // Parse the tab name to get month and type (PE/CE)
+    const parts = activeMonthTab.split('_');
+    if (parts.length !== 2) return [];
+    
+    const month = parts[0];
+    const type = parts[1]; // 'PE' or 'CE'
+    
+    let monthPositions: Position[] = [];
     if (familyView && groupedFamilyPositions) {
-      return groupedFamilyPositions[activeMonthTab] || [];
+      monthPositions = groupedFamilyPositions[month] || [];
     } else if (!familyView && groupedPositions) {
-      return groupedPositions[activeMonthTab] || [];
+      monthPositions = groupedPositions[month] || [];
     }
-    return [];
+    
+    // Filter by PE or CE
+    return monthPositions.filter(position => {
+      if (type === 'PE') {
+        return position.tradingSymbol.endsWith('PE');
+      } else if (type === 'CE') {
+        return position.tradingSymbol.endsWith('CE');
+      }
+      return false;
+    });
   };
 
-  // Get available months for tabs
+  // Get available months for tabs (with PE and CE variants)
   const getAvailableMonths = () => {
-    const months = [];
-    if (familyView && groupedFamilyPositions) {
-      months.push('Overview', ...Object.keys(groupedFamilyPositions));
-    } else if (!familyView && groupedPositions) {
-      months.push('Overview', ...Object.keys(groupedPositions));
-    } else {
-      months.push('Overview');
+    const tabs = ['Overview'];
+    const monthGroups = familyView ? groupedFamilyPositions : groupedPositions;
+    
+    if (monthGroups) {
+      const months = Object.keys(monthGroups);
+      months.forEach(month => {
+        // Check if this month has PE positions
+        const hasPE = monthGroups[month].some(pos => pos.tradingSymbol.endsWith('PE'));
+        // Check if this month has CE positions
+        const hasCE = monthGroups[month].some(pos => pos.tradingSymbol.endsWith('CE'));
+        
+        if (hasPE) tabs.push(`${month}_PE`);
+        if (hasCE) tabs.push(`${month}_CE`);
+      });
     }
-    return months;
+    
+    return tabs;
   };
 
   const togglePositionExpansion = (positionId: number) => {
@@ -370,16 +418,9 @@ export default function Positions() {
 
   // Set active tab when positions are loaded
   React.useEffect(() => {
-    if (familyView && groupedFamilyPositions) {
-      const months = Object.keys(groupedFamilyPositions);
-      if (months.length > 0 && !activeMonthTab) {
-        setActiveMonthTab('Overview');
-      }
-    } else if (!familyView && groupedPositions) {
-      const months = Object.keys(groupedPositions);
-      if (months.length > 0 && !activeMonthTab) {
-        setActiveMonthTab('Overview');
-      }
+    const availableTabs = getAvailableMonths();
+    if (availableTabs.length > 0 && !activeMonthTab) {
+      setActiveMonthTab('Overview');
     }
   }, [groupedFamilyPositions, groupedPositions, familyView, activeMonthTab]);
 
@@ -427,6 +468,7 @@ export default function Positions() {
       return 0;
     });
   }, [getCurrentMonthPositions, sortConfig]);
+
 
   const getSortIcon = (key: keyof Position | 'remainingPnL' | 'remainingProfitPercentage') => {
     if (sortConfig.key !== key) {
@@ -808,26 +850,23 @@ export default function Positions() {
             <div className="bg-white shadow-sm rounded-lg mb-6 inline-block">
               <div className="px-4 py-2">
                 <div className="flex space-x-8 overflow-x-auto border-b border-gray-200">
-                  {getAvailableMonths().map((month) => {
-                    let monthPositions = [];
-                    let totalMarketValue = 0;
+                  {getAvailableMonths().map((tab) => {
+                    const isActive = activeMonthTab === tab;
+                    const isOverview = tab === 'Overview';
                     
-                    if (month === 'Overview') {
-                      monthPositions = positions || [];
-                      totalMarketValue = monthPositions.reduce((sum, pos) => sum + pos.marketValue, 0);
-                    } else {
-                      monthPositions = familyView 
-                        ? (groupedFamilyPositions?.[month] || [])
-                        : (groupedPositions?.[month] || []);
-                      totalMarketValue = monthPositions.reduce((sum, pos) => sum + pos.marketValue, 0);
+                    // Parse tab name for display
+                    let displayName = tab;
+                    if (!isOverview) {
+                      const parts = tab.split('_');
+                      if (parts.length === 2) {
+                        displayName = `${parts[0]} ${parts[1]}`;
+                      }
                     }
-                    
-                    const isActive = activeMonthTab === month;
                     
                     return (
                       <button
-                        key={month}
-                        onClick={() => setActiveMonthTab(month)}
+                        key={tab}
+                        onClick={() => setActiveMonthTab(tab)}
                         className={`flex-shrink-0 flex items-center space-x-2 py-3 px-1 transition-colors relative ${
                           isActive
                             ? 'text-purple-600'
@@ -835,13 +874,13 @@ export default function Positions() {
                         }`}
                       >
                         <div className="flex items-center space-x-2">
-                          {month === 'Overview' ? (
+                          {isOverview ? (
                             <ChartBarIcon className={`h-5 w-5 ${isActive ? 'text-purple-600' : 'text-gray-600'}`} />
                           ) : (
                             <CalendarIcon className={`h-5 w-5 ${isActive ? 'text-purple-600' : 'text-gray-600'}`} />
                           )}
                           <span className={`text-sm font-medium ${isActive ? 'text-purple-600' : 'text-gray-600'}`}>
-                            {month}
+                            {displayName}
                           </span>
                         </div>
                         {isActive && (
@@ -874,12 +913,17 @@ export default function Positions() {
             ) : activeMonthTab === 'Overview' ? (
               // Overview Tab - Show month rows with account cards
               <div className="p-6">
-                {getAvailableMonths().filter(month => month !== 'Overview').map((month) => {
-                  const monthPositions = familyView 
-                    ? (groupedFamilyPositions?.[month] || [])
-                    : (groupedPositions?.[month] || []);
+                {(() => {
+                  // Get unique months from tabs (extract month name from "Month_PE" or "Month_CE")
+                  const monthGroups = familyView ? groupedFamilyPositions : groupedPositions;
+                  const uniqueMonths = monthGroups ? Object.keys(monthGroups) : [];
                   
-                  if (monthPositions.length === 0) return null;
+                  return uniqueMonths.map((month) => {
+                    const monthPositions = familyView 
+                      ? (groupedFamilyPositions?.[month] || [])
+                      : (groupedPositions?.[month] || []);
+                    
+                    if (monthPositions.length === 0) return null;
                   
                   // Group positions by account for this month
                   const accountGroups = new Map<string, { 
@@ -982,7 +1026,16 @@ export default function Positions() {
                             </div>
                           </div>
                           <button
-                            onClick={() => setActiveMonthTab(month)}
+                            onClick={() => {
+                              // Find the first available tab for this month (PE or CE)
+                              const availableTabs = getAvailableMonths();
+                              const monthTab = availableTabs.find(tab => 
+                                tab.startsWith(`${month}_`)
+                              );
+                              if (monthTab) {
+                                setActiveMonthTab(monthTab);
+                              }
+                            }}
                             className="px-4 py-2 text-sm text-purple-600 hover:text-purple-700 font-medium border border-purple-200 hover:border-purple-300 rounded-lg transition-colors"
                           >
                             View Details →
@@ -1060,14 +1113,19 @@ export default function Positions() {
                       </div>
                     </div>
                   );
-                })}
+                  });
+                })()}
                 
-                {getAvailableMonths().filter(month => month !== 'Overview').every(month => {
-                  const monthPositions = familyView 
-                    ? (groupedFamilyPositions?.[month] || [])
-                    : (groupedPositions?.[month] || []);
-                  return monthPositions.length === 0;
-                }) && (
+                {(() => {
+                  const monthGroups = familyView ? groupedFamilyPositions : groupedPositions;
+                  const uniqueMonths = monthGroups ? Object.keys(monthGroups) : [];
+                  return uniqueMonths.length === 0 || uniqueMonths.every(month => {
+                    const monthPositions = familyView 
+                      ? (groupedFamilyPositions?.[month] || [])
+                      : (groupedPositions?.[month] || []);
+                    return monthPositions.length === 0;
+                  });
+                })() && (
                   <div className="text-center py-8">
                     <ChartBarIcon className="h-12 w-12 text-gray-400 mx-auto" />
                     <h3 className="mt-2 text-sm font-medium text-gray-900">No positions found</h3>
@@ -1078,12 +1136,12 @@ export default function Positions() {
                 )}
               </div>
             ) : getSortedCurrentMonthPositions.length > 0 ? (
-              <div className="overflow-x-auto">
-                <table className="min-w-full divide-y divide-gray-200">
-                  <thead className="bg-gray-50">
+              <div className="overflow-x-auto overflow-y-auto max-h-[calc(100vh-300px)]">
+                <table className="min-w-full divide-y divide-gray-200 border-collapse">
+                  <thead className="bg-gray-50 sticky top-0 z-10">
                     <tr>
                       <th 
-                        className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100"
+                        className="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100 border-r border-gray-200"
                         onClick={() => handleSort('tradingSymbol')}
                       >
                         <div className="flex items-center">
@@ -1093,7 +1151,7 @@ export default function Positions() {
                       </th>
                       {familyView && !selectedFamilyName && (
                         <th 
-                          className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100"
+                          className="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100 border-r border-gray-200"
                           onClick={() => handleSort('family')}
                         >
                           <div className="flex items-center">
@@ -1103,16 +1161,16 @@ export default function Positions() {
                         </th>
                       )}
                       <th 
-                        className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100"
+                        className="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100 border-r border-gray-200"
                         onClick={() => handleSort('quantity')}
                       >
                         <div className="flex items-center">
-                          Quantity
+                          Qty
                           {getSortIcon('quantity')}
                         </div>
                       </th>
                       <th 
-                        className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100"
+                        className="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100 border-r border-gray-200"
                         onClick={() => handleSort('marginBlocked')}
                       >
                         <div className="flex items-center">
@@ -1121,16 +1179,7 @@ export default function Positions() {
                         </div>
                       </th>
                       <th 
-                        className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100"
-                        onClick={() => handleSort('remainingPnL' as keyof Position)}
-                      >
-                        <div className="flex items-center">
-                          Remaining P&L
-                          {getSortIcon('remainingPnL' as keyof Position)}
-                        </div>
-                      </th>
-                      <th 
-                        className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100"
+                        className="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100 border-r border-gray-200"
                         onClick={() => handleSort('remainingProfitPercentage')}
                       >
                         <div className="flex items-center">
@@ -1139,16 +1188,16 @@ export default function Positions() {
                         </div>
                       </th>
                       <th 
-                        className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100"
+                        className="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100 border-r border-gray-200"
                         onClick={() => handleSort('marketValue')}
                       >
                         <div className="flex items-center">
-                          Market Value (Possible Max Profit)
+                          Position Profit %
                           {getSortIcon('marketValue')}
                         </div>
                       </th>
                       <th 
-                        className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100"
+                        className="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100 border-r border-gray-200"
                         onClick={() => handleSort('averagePrice')}
                       >
                         <div className="flex items-center">
@@ -1157,7 +1206,7 @@ export default function Positions() {
                         </div>
                       </th>
                       <th 
-                        className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100"
+                        className="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100 border-r border-gray-200"
                         onClick={() => handleSort('lastPrice')}
                       >
                         <div className="flex items-center">
@@ -1166,12 +1215,10 @@ export default function Positions() {
                         </div>
                       </th>
                       <th 
-                        className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100"
-                        onClick={() => handleSort('pnl')}
+                        className="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100"
                       >
                         <div className="flex items-center">
-                          Current P&L
-                          {getSortIcon('pnl')}
+                          Current + Remaining = Total Profit
                         </div>
                       </th>
                     </tr>
@@ -1180,7 +1227,7 @@ export default function Positions() {
                     {getSortedCurrentMonthPositions.map((position) => (
                       <React.Fragment key={position.id}>
                         <tr className={`hover:bg-gray-50 ${getRowBackgroundColor(position)}`}>
-                          <td className="px-6 py-4 whitespace-nowrap">
+                          <td className="px-3 py-4 whitespace-nowrap border-r border-gray-200">
                             <div className="flex items-center">
                               <div className={`w-3 h-3 rounded-full mr-2 ${position.side === 'BUY' ? 'bg-green-500' : 'bg-red-500'}`}></div>
                               <div className="text-sm font-medium text-gray-900">{position.tradingSymbol}</div>
@@ -1203,43 +1250,38 @@ export default function Positions() {
                             </div>
                           </td>
                           {familyView && !selectedFamilyName && (
-                            <td className="px-6 py-4 whitespace-nowrap">
+                            <td className="px-3 py-4 whitespace-nowrap border-r border-gray-200">
                               <div className="text-sm text-gray-900">
                                 {position.family || 'Unknown'}
                               </div>
                             </td>
                           )}
-                          <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
+                          <td className="px-3 py-4 whitespace-nowrap text-sm text-gray-900 border-r border-gray-200">
                             {formatNumber(position.quantity)}
                           </td>
-                          <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
+                          <td className="px-3 py-4 whitespace-nowrap text-sm text-gray-900 border-r border-gray-200">
                             {formatCurrency(position.marginBlocked || 0)}
                           </td>
-                          <td className="px-6 py-4 whitespace-nowrap text-sm">
-                            <span className={getPnLColor(-position.marketValue - position.pnl)}>
-                              {formatCurrency(-position.marketValue - position.pnl)}
-                            </span>
-                          </td>
-                          <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
+                          <td className="px-3 py-4 whitespace-nowrap text-sm text-gray-900 border-r border-gray-200">
                             {(() => {
                               const percentage = getMarginPercentageValue(-position.marketValue - position.pnl, position.marginBlocked || 0);
                               return percentage !== null ? `${percentage.toFixed(1)}%` : 'N/A';
                             })()}
                           </td>
-                          <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
-                            {formatCurrency(-position.marketValue)}
-                            {getMarginPercentage(-position.marketValue, position.marginBlocked || 0)}
+                          <td className="px-3 py-4 whitespace-nowrap text-sm text-gray-900 border-r border-gray-200">
+                            {(() => {
+                              const percentage = getMarginPercentageValue(-position.marketValue, position.marginBlocked || 0);
+                              return percentage !== null ? `${percentage.toFixed(1)}%` : 'N/A';
+                            })()}
                           </td>
-                          <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
+                          <td className="px-3 py-4 whitespace-nowrap text-sm text-gray-900 border-r border-gray-200">
                             {formatCurrencyWithDecimals(position.averagePrice)}
                           </td>
-                          <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
+                          <td className="px-3 py-4 whitespace-nowrap text-sm text-gray-900 border-r border-gray-200">
                             {formatCurrencyWithDecimals(position.lastPrice)}
                           </td>
-                          <td className="px-6 py-4 whitespace-nowrap text-sm">
-                            <span className={getPnLColor(position.pnl)}>
-                              {formatCurrency(position.pnl)}
-                            </span>
+                          <td className="px-3 py-4 whitespace-nowrap text-sm">
+                            {formatProfitDisplay(position.pnl, -position.marketValue - position.pnl)}
                           </td>
                         </tr>
                         
@@ -1250,33 +1292,26 @@ export default function Positions() {
                               // Family view - show individual accounts
                               position.accounts.map((account, index) => (
                                 <tr key={`${position.id}-${account.id}`} className="bg-gray-50 border-l-4 border-primary-200">
-                                  <td className="px-6 py-3 whitespace-nowrap pl-12">
+                                  <td className="px-3 py-3 whitespace-nowrap pl-8 border-r border-gray-200">
                                     <div className="text-sm text-gray-600">
                                       <span className="font-medium">{account.name}</span>
                                       <span className="text-xs text-gray-400 ml-2">(Account)</span>
                                     </div>
                                   </td>
                                   {familyView && !selectedFamilyName && (
-                                    <td className="px-6 py-3 whitespace-nowrap">
+                                    <td className="px-3 py-3 whitespace-nowrap border-r border-gray-200">
                                       <div className="text-sm text-gray-600">
                                         {account.family || 'Unknown'}
                                       </div>
                                     </td>
                                   )}
-                                  <td className="px-6 py-3 whitespace-nowrap text-sm text-gray-600">
+                                  <td className="px-3 py-3 whitespace-nowrap text-sm text-gray-600 border-r border-gray-200">
                                     {account.quantity !== undefined ? formatNumber(account.quantity) : 'N/A'}
                                   </td>
-                                  <td className="px-6 py-3 whitespace-nowrap text-sm text-gray-600">
+                                  <td className="px-3 py-3 whitespace-nowrap text-sm text-gray-600 border-r border-gray-200">
                                     {formatCurrency(account.marginBlocked || 0)}
                                   </td>
-                                  <td className="px-6 py-3 whitespace-nowrap text-sm text-gray-600">
-                                    {account.marketValue !== undefined && account.pnl !== undefined ? (
-                                      <span className={getPnLColor(-account.marketValue - account.pnl)}>
-                                        {formatCurrency(-account.marketValue - account.pnl)}
-                                      </span>
-                                    ) : 'N/A'}
-                                  </td>
-                                  <td className="px-6 py-3 whitespace-nowrap text-sm text-gray-600">
+                                  <td className="px-3 py-3 whitespace-nowrap text-sm text-gray-600 border-r border-gray-200">
                                     {account.marketValue !== undefined && account.pnl !== undefined ? (
                                       (() => {
                                         const percentage = getMarginPercentageValue(-account.marketValue - account.pnl, account.marginBlocked || 0);
@@ -1284,25 +1319,23 @@ export default function Positions() {
                                       })()
                                     ) : 'N/A'}
                                   </td>
-                                  <td className="px-6 py-3 whitespace-nowrap text-sm text-gray-600">
+                                  <td className="px-3 py-3 whitespace-nowrap text-sm text-gray-600 border-r border-gray-200">
                                     {account.marketValue !== undefined ? (
-                                      <>
-                                        {formatCurrency(-account.marketValue)}
-                                        {getMarginPercentage(-account.marketValue, account.marginBlocked || 0)}
-                                      </>
+                                      (() => {
+                                        const percentage = getMarginPercentageValue(-account.marketValue, account.marginBlocked || 0);
+                                        return percentage !== null ? `${percentage.toFixed(1)}%` : 'N/A';
+                                      })()
                                     ) : 'N/A'}
                                   </td>
-                                  <td className="px-6 py-3 whitespace-nowrap text-sm text-gray-600">
+                                  <td className="px-3 py-3 whitespace-nowrap text-sm text-gray-600 border-r border-gray-200">
                                     {account.averagePrice !== undefined ? formatCurrencyWithDecimals(account.averagePrice) : 'N/A'}
                                   </td>
-                                  <td className="px-6 py-3 whitespace-nowrap text-sm text-gray-600">
+                                  <td className="px-3 py-3 whitespace-nowrap text-sm text-gray-600 border-r border-gray-200">
                                     {account.lastPrice !== undefined ? formatCurrencyWithDecimals(account.lastPrice) : 'N/A'}
                                   </td>
-                                  <td className="px-6 py-3 whitespace-nowrap text-sm text-gray-600">
-                                    {account.pnl !== undefined ? (
-                                      <span className={getPnLColor(account.pnl)}>
-                                        {formatCurrency(account.pnl)}
-                                      </span>
+                                  <td className="px-3 py-3 whitespace-nowrap text-sm text-gray-600">
+                                    {account.marketValue !== undefined && account.pnl !== undefined ? (
+                                      formatProfitDisplay(account.pnl, -account.marketValue - account.pnl)
                                     ) : 'N/A'}
                                   </td>
                                 </tr>
@@ -1310,50 +1343,45 @@ export default function Positions() {
                             ) : (
                               // Individual view - show position details
                               <tr className="bg-gray-50 border-l-4 border-primary-200">
-                                <td className="px-6 py-3 whitespace-nowrap pl-12">
+                                <td className="px-3 py-3 whitespace-nowrap pl-8 border-r border-gray-200">
                                   <div className="text-sm text-gray-600">
                                     <span className="font-medium">{position.account?.name || 'Unknown Account'}</span>
                                     <span className="text-xs text-gray-400 ml-2">(Account)</span>
                                   </div>
                                 </td>
                                 {familyView && !selectedFamilyName && (
-                                  <td className="px-6 py-3 whitespace-nowrap">
+                                  <td className="px-3 py-3 whitespace-nowrap border-r border-gray-200">
                                     <div className="text-sm text-gray-600">
                                       {position.family || 'Unknown'}
                                     </div>
                                   </td>
                                 )}
-                                <td className="px-6 py-3 whitespace-nowrap text-sm text-gray-600">
+                                <td className="px-3 py-3 whitespace-nowrap text-sm text-gray-600 border-r border-gray-200">
                                   {formatNumber(position.quantity)}
                                 </td>
-                                <td className="px-6 py-3 whitespace-nowrap text-sm text-gray-600">
+                                <td className="px-3 py-3 whitespace-nowrap text-sm text-gray-600 border-r border-gray-200">
                                   {formatCurrency(position.marginBlocked || 0)}
                                 </td>
-                                <td className="px-6 py-3 whitespace-nowrap text-sm text-gray-600">
-                                  <span className={getPnLColor(-position.marketValue - position.pnl)}>
-                                    {formatCurrency(-position.marketValue - position.pnl)}
-                                  </span>
-                                </td>
-                                <td className="px-6 py-3 whitespace-nowrap text-sm text-gray-600">
+                                <td className="px-3 py-3 whitespace-nowrap text-sm text-gray-600 border-r border-gray-200">
                                   {(() => {
                                     const percentage = getMarginPercentageValue(-position.marketValue - position.pnl, position.marginBlocked || 0);
                                     return percentage !== null ? `${percentage.toFixed(1)}%` : 'N/A';
                                   })()}
                                 </td>
-                                <td className="px-6 py-3 whitespace-nowrap text-sm text-gray-600">
-                                  {formatCurrency(-position.marketValue)}
-                                  {getMarginPercentage(-position.marketValue, position.marginBlocked || 0)}
+                                <td className="px-3 py-3 whitespace-nowrap text-sm text-gray-600 border-r border-gray-200">
+                                  {(() => {
+                                    const percentage = getMarginPercentageValue(-position.marketValue, position.marginBlocked || 0);
+                                    return percentage !== null ? `${percentage.toFixed(1)}%` : 'N/A';
+                                  })()}
                                 </td>
-                                <td className="px-6 py-3 whitespace-nowrap text-sm text-gray-600">
+                                <td className="px-3 py-3 whitespace-nowrap text-sm text-gray-600 border-r border-gray-200">
                                   {formatCurrencyWithDecimals(position.averagePrice)}
                                 </td>
-                                <td className="px-6 py-3 whitespace-nowrap text-sm text-gray-600">
+                                <td className="px-3 py-3 whitespace-nowrap text-sm text-gray-600 border-r border-gray-200">
                                   {formatCurrencyWithDecimals(position.lastPrice)}
                                 </td>
-                                <td className="px-6 py-3 whitespace-nowrap text-sm text-gray-600">
-                                  <span className={getPnLColor(position.pnl)}>
-                                    {formatCurrency(position.pnl)}
-                                  </span>
+                                <td className="px-3 py-3 whitespace-nowrap text-sm text-gray-600">
+                                  {formatProfitDisplay(position.pnl, -position.marketValue - position.pnl)}
                                 </td>
                               </tr>
                             )}

@@ -7,11 +7,13 @@ import {
   CurrencyDollarIcon,
   EyeIcon,
   UserIcon,
+  ExclamationTriangleIcon,
 } from '@heroicons/react/24/outline';
 import { PieChart, Pie, Cell, ResponsiveContainer, Legend, Tooltip } from 'recharts';
 import Layout from '../components/Layout';
 import { getHoldings, getHoldingsSummary } from '../services/holdingsService';
 import { getAccounts, type Account } from '../services/accountsService';
+import { getMarginsSummary, type Margin } from '../services/marginsService';
 
 export default function FamilyDetails() {
   const { familyName } = useParams<{ familyName: string }>();
@@ -31,6 +33,13 @@ export default function FamilyDetails() {
     if (!decodedFamilyName || !accounts) return [];
     return accounts.filter(account => account.family === decodedFamilyName);
   }, [decodedFamilyName, accounts]);
+
+  // Get margins summary for all accounts
+  const { data: marginsSummary } = useQuery({
+    queryKey: ['margins-summary'],
+    queryFn: getMarginsSummary,
+    enabled: !!accounts && accounts.length > 0,
+  });
 
   // Determine if we're viewing Overview or a specific account
   const selectedAccountId = activeTab !== 'Overview' ? parseInt(activeTab) : null;
@@ -141,6 +150,41 @@ export default function FamilyDetails() {
     return pnl >= 0 ? 'text-green-600' : 'text-red-600';
   };
 
+  // Custom function to calculate available margin for an account (same logic as Positions page)
+  const calculateCustomMargin = (accountId: number): number => {
+    if (!marginsSummary) return 0;
+    const margin = marginsSummary.find(m => m.accountId === accountId);
+    if (!margin) return 0;
+    
+    // Calculate margin based on 50% liquid collateral first
+    const availableLiquidCollateral = margin.liquidCollateral - (margin.debits / 2);
+    if (availableLiquidCollateral * 2 > margin.net) {
+      // Available margin as per zerodha is having more than 50% of liquid collateral, so we can use that entire margin
+      return margin.net;
+    } else {
+      return availableLiquidCollateral * 2;
+    }
+  };
+
+  // Function to get used margin (debits) for an account (same logic as Positions page)
+  const getUsedMargin = (accountId: number): number => {
+    if (!marginsSummary) return 0;
+    const margin = marginsSummary.find(m => m.accountId === accountId);
+    if (!margin) return 0;
+    
+    return margin.debits || 0;
+  };
+
+  // Function to count negative margin warnings for an account
+  const getNegativeMarginCount = (accountId: number): number => {
+    const usedMargin = getUsedMargin(accountId);
+    const availableMargin = calculateCustomMargin(accountId);
+    let count = 0;
+    if (usedMargin < 0) count++;
+    if (availableMargin < 0) count++;
+    return count;
+  };
+
   // Component to render portfolio overview card
   const PortfolioOverviewCard = ({ data, isLoading }: { data: any; isLoading: boolean }) => {
     if (isLoading) {
@@ -217,8 +261,141 @@ export default function FamilyDetails() {
       'Unmapped': '#EF4444', // Red color for unmapped
     };
 
+    // Calculate margin data for the family or account
+    const calculateMarginData = () => {
+      const accountIds = selectedAccountId 
+        ? [selectedAccountId] 
+        : familyAccounts.map(acc => acc.id);
+      
+      let totalUsedMargin = 0;
+      let totalAvailableMargin = 0;
+      
+      accountIds.forEach(accountId => {
+        totalUsedMargin += getUsedMargin(accountId);
+        totalAvailableMargin += calculateCustomMargin(accountId);
+      });
+      
+      return {
+        usedMargin: totalUsedMargin,
+        availableMargin: totalAvailableMargin,
+      };
+    };
+
+    const marginData = calculateMarginData();
+    const marginPieChartData = [
+      {
+        name: 'Used',
+        value: marginData.usedMargin,
+        color: '#EF4444', // Red
+      },
+      {
+        name: 'Available',
+        value: marginData.availableMargin,
+        color: '#10B981', // Green
+      },
+    ].filter(item => item.value > 0); // Only show if there's data
+
     return (
       <div className="space-y-6">
+        {/* Margin Card */}
+        {marginPieChartData.length > 0 && (
+          <div className="bg-white border border-gray-200 rounded-lg shadow-sm p-6">
+            <h3 className="text-lg font-semibold text-gray-900 mb-6">Margin</h3>
+            <div className="flex flex-col md:flex-row items-center justify-center gap-8">
+              <div className="w-full md:w-1/2">
+                <ResponsiveContainer width="100%" height={300}>
+                  <PieChart>
+                    <Pie
+                      data={marginPieChartData}
+                      cx="50%"
+                      cy="50%"
+                      labelLine={false}
+                      label={({ name, percent }) => `${name}: ${(percent * 100).toFixed(1)}%`}
+                      outerRadius={100}
+                      fill="#8884d8"
+                      dataKey="value"
+                    >
+                      {marginPieChartData.map((entry, index) => (
+                        <Cell key={`cell-${index}`} fill={entry.color} />
+                      ))}
+                    </Pie>
+                    <Tooltip 
+                      formatter={(value: number) => formatCurrency(value)}
+                    />
+                    <Legend />
+                  </PieChart>
+                </ResponsiveContainer>
+              </div>
+              <div className="w-full md:w-1/2">
+                <div className="overflow-x-auto">
+                  <table className="min-w-full divide-y divide-gray-200">
+                    <thead className="bg-gray-50">
+                      <tr>
+                        <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                          Account
+                        </th>
+                        <th className="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">
+                          Used Margin
+                        </th>
+                        <th className="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">
+                          Available Margin
+                        </th>
+                      </tr>
+                    </thead>
+                    <tbody className="bg-white divide-y divide-gray-200">
+                      {(() => {
+                        // Determine which accounts to display
+                        const accountsToDisplay = selectedAccountId 
+                          ? familyAccounts.filter(acc => acc.id === selectedAccountId)
+                          : familyAccounts;
+                        
+                        return accountsToDisplay.map((account) => {
+                          const accountUsedMargin = getUsedMargin(account.id);
+                          const accountAvailableMargin = calculateCustomMargin(account.id);
+                          
+                          return (
+                            <tr key={account.id} className="hover:bg-gray-50">
+                              <td className="px-4 py-3 whitespace-nowrap">
+                                <span className="text-sm font-medium text-gray-900">{account.name}</span>
+                              </td>
+                              <td className="px-4 py-3 whitespace-nowrap text-right">
+                                <div className={`text-sm font-medium ${accountUsedMargin < 0 ? 'text-red-600' : 'text-gray-900'}`}>
+                                  {formatCurrency(accountUsedMargin)}
+                                </div>
+                              </td>
+                              <td className="px-4 py-3 whitespace-nowrap text-right">
+                                <div className={`text-sm font-medium ${accountAvailableMargin < 0 ? 'text-red-600' : 'text-gray-900'}`}>
+                                  {formatCurrency(accountAvailableMargin)}
+                                </div>
+                              </td>
+                            </tr>
+                          );
+                        });
+                      })()}
+                      {/* Total Row */}
+                      <tr className="bg-gray-50 border-t-2 border-gray-300">
+                        <td className="px-4 py-3 whitespace-nowrap">
+                          <span className="text-sm font-bold text-gray-900">Total</span>
+                        </td>
+                        <td className="px-4 py-3 whitespace-nowrap text-right">
+                          <div className={`text-sm font-bold ${marginData.usedMargin < 0 ? 'text-red-600' : 'text-gray-900'}`}>
+                            {formatCurrency(marginData.usedMargin)}
+                          </div>
+                        </td>
+                        <td className="px-4 py-3 whitespace-nowrap text-right">
+                          <div className={`text-sm font-bold ${marginData.availableMargin < 0 ? 'text-red-600' : 'text-gray-900'}`}>
+                            {formatCurrency(marginData.availableMargin)}
+                          </div>
+                        </td>
+                      </tr>
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+
         {/* Holdings Card */}
         {pieChartData.length > 0 && (
           <div className="bg-white border border-gray-200 rounded-lg shadow-sm p-6">
@@ -388,6 +565,7 @@ export default function FamilyDetails() {
             {/* Member Tabs */}
             {familyAccounts.map((account) => {
               const isActive = activeTab === account.id.toString();
+              const negativeMarginCount = getNegativeMarginCount(account.id);
               
               return (
                 <button
@@ -404,6 +582,12 @@ export default function FamilyDetails() {
                     <span className={`text-sm font-medium ${isActive ? 'text-purple-600' : 'text-gray-600'}`}>
                       {account.name}
                     </span>
+                    {negativeMarginCount > 0 && (
+                      <div className="flex items-center space-x-1 bg-red-100 text-red-600 rounded-full px-2 py-0.5">
+                        <ExclamationTriangleIcon className="h-4 w-4" />
+                        <span className="text-xs font-semibold">{negativeMarginCount}</span>
+                      </div>
+                    )}
                   </div>
                   {isActive && (
                     <div className="absolute bottom-0 left-0 right-0 h-0.5 bg-purple-600"></div>

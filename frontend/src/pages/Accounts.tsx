@@ -21,6 +21,8 @@ import {
 } from '@heroicons/react/24/outline';
 import Layout from '../components/Layout';
 import { getAccounts, createAccount, updateAccount, deleteAccount, syncAccount, syncAllAccounts, getLoginUrl, exchangeToken, type Account, type CreateAccountData, type UpdateAccountData } from '../services/accountsService';
+import { getMarginsSummary } from '../services/marginsService';
+import { getPositionsSummary } from '../services/positionsService';
 
 interface Message {
   id: string;
@@ -83,6 +85,32 @@ export default function Accounts() {
     queryKey: ['accounts'],
     queryFn: getAccounts,
     refetchInterval: 30000,
+  });
+
+  // Get margins summary for all accounts
+  const { data: marginsSummary } = useQuery({
+    queryKey: ['margins-summary'],
+    queryFn: getMarginsSummary,
+    enabled: !!accounts && accounts.length > 0,
+  });
+
+  // Get positions summary for all accounts
+  const { data: allAccountsSummary } = useQuery({
+    queryKey: ['positions-summary-all'],
+    queryFn: async () => {
+      if (!accounts) return {};
+      const summaries: Record<number, any> = {};
+      for (const account of accounts) {
+        try {
+          const summary = await getPositionsSummary(account.id);
+          summaries[account.id] = summary;
+        } catch (error) {
+          console.error(`Failed to get summary for account ${account.id}:`, error);
+        }
+      }
+      return summaries;
+    },
+    enabled: !!accounts && accounts.length > 0,
   });
 
   const addAccountMutation = useMutation({
@@ -284,6 +312,58 @@ export default function Accounts() {
     });
   };
 
+  // Custom function to calculate available margin for an account (same logic as Positions page)
+  const calculateCustomMargin = (accountId: number): number => {
+    if (!marginsSummary) return 0;
+    const margin = marginsSummary.find(m => m.accountId === accountId);
+    if (!margin) return 0;
+    
+    // Calculate margin based on 50% liquid collateral first
+    const availableLiquidCollateral = margin.liquidCollateral - (margin.debits / 2);
+    if (availableLiquidCollateral * 2 > margin.net) {
+      // Available margin as per zerodha is having more than 50% of liquid collateral, so we can use that entire margin
+      return margin.net;
+    } else {
+      return availableLiquidCollateral * 2;
+    }
+  };
+
+  // Format currency helper
+  const formatCurrency = (amount: number) => {
+    return new Intl.NumberFormat('en-IN', {
+      style: 'currency',
+      currency: 'INR',
+      minimumFractionDigits: 0,
+      maximumFractionDigits: 0,
+    }).format(amount);
+  };
+
+  // Function to get used margin (debits) for an account (same logic as Positions page)
+  const getUsedMargin = (accountId: number): number => {
+    if (!marginsSummary) return 0;
+    const margin = marginsSummary.find(m => m.accountId === accountId);
+    if (!margin) return 0;
+    
+    return margin.debits || 0;
+  };
+
+  // Function to count negative margin warnings for an account
+  const getNegativeMarginCount = (accountId: number): number => {
+    const usedMargin = getUsedMargin(accountId);
+    const availableMargin = calculateCustomMargin(accountId);
+    let count = 0;
+    if (usedMargin < 0) count++;
+    if (availableMargin < 0) count++;
+    return count;
+  };
+
+  // Function to calculate total warnings for a family
+  const getFamilyTotalWarnings = (familyAccounts: Account[]): number => {
+    return familyAccounts.reduce((total, account) => {
+      return total + getNegativeMarginCount(account.id);
+    }, 0);
+  };
+
   const groupedAccounts = groupAccountsByFamily();
 
   return (
@@ -345,7 +425,13 @@ export default function Accounts() {
                   Account Name
                 </th>
                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                  Max Profit (% of Total Margin)
+                </th>
+                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
                   Last Sync
+                </th>
+                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                  Warnings
                 </th>
                 <th className="px-6 py-3 text-center text-xs font-medium text-gray-500 uppercase tracking-wider">
                   Actions
@@ -361,27 +447,73 @@ export default function Accounts() {
                     <tr 
                       className="bg-gray-100 hover:bg-gray-200"
                     >
-                      <td className="px-6 py-4 whitespace-nowrap" colSpan={3}>
-                        <div className="flex items-center justify-between">
-                          <div 
-                            className="flex items-center cursor-pointer flex-1"
-                            onClick={() => toggleFamily(family)}
-                          >
-                            {isExpanded ? (
-                              <ChevronDownIcon className="h-5 w-5 text-gray-600 mr-2" />
-                            ) : (
-                              <ChevronRightIcon className="h-5 w-5 text-gray-600 mr-2" />
-                            )}
-                            <span className="text-sm font-semibold text-gray-900">
-                              {family} ({familyAccounts.length} {familyAccounts.length === 1 ? 'account' : 'accounts'})
-                            </span>
-                          </div>
+                      <td className="px-6 py-4 whitespace-nowrap">
+                        <div 
+                          className="flex items-center cursor-pointer"
+                          onClick={() => toggleFamily(family)}
+                        >
+                          {isExpanded ? (
+                            <ChevronDownIcon className="h-5 w-5 text-gray-600 mr-2" />
+                          ) : (
+                            <ChevronRightIcon className="h-5 w-5 text-gray-600 mr-2" />
+                          )}
+                          <span className="text-sm font-semibold text-gray-900">
+                            {family} ({familyAccounts.length} {familyAccounts.length === 1 ? 'account' : 'accounts'})
+                          </span>
+                        </div>
+                      </td>
+                      <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
+                        {(() => {
+                          // Calculate family-level max profit and percentage
+                          let totalMaxProfit = 0;
+                          let totalAvailableMargin = 0;
+                          let totalUsedMargin = 0;
+                          
+                          familyAccounts.forEach((account) => {
+                            const accountSummary = allAccountsSummary?.[account.id];
+                            const maxProfit = accountSummary?.summary?.totalMarketValue || 0;
+                            totalMaxProfit += maxProfit;
+                            totalAvailableMargin += calculateCustomMargin(account.id);
+                            totalUsedMargin += getUsedMargin(account.id);
+                          });
+                          
+                          const totalMargin = totalAvailableMargin + totalUsedMargin;
+                          const percentage = totalMargin > 0 ? (-totalMaxProfit / totalMargin) * 100 : 0;
+                          
+                          return (
+                            <div>
+                              <div>{formatCurrency(-totalMaxProfit)}</div>
+                              <div className="text-xs text-gray-500">
+                                ({percentage.toFixed(2)}%)
+                              </div>
+                            </div>
+                          );
+                        })()}
+                      </td>
+                      <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                        {/* Last Sync column - empty for family header */}
+                      </td>
+                      <td className="px-6 py-4 whitespace-nowrap text-sm">
+                        {(() => {
+                          const totalWarnings = getFamilyTotalWarnings(familyAccounts);
+                          return totalWarnings > 0 ? (
+                            <div className="inline-flex items-center space-x-1 bg-red-100 text-red-600 rounded-full px-2 py-1">
+                              <ExclamationTriangleIcon className="h-4 w-4" />
+                              <span className="text-xs font-semibold">{totalWarnings}</span>
+                            </div>
+                          ) : (
+                            <span className="text-xs text-gray-400">—</span>
+                          );
+                        })()}
+                      </td>
+                      <td className="px-6 py-4 whitespace-nowrap text-center text-sm font-medium">
+                        <div className="flex items-center justify-end">
                           <button
                             onClick={(e) => {
                               e.stopPropagation();
                               navigate(`/family/${encodeURIComponent(family)}`);
                             }}
-                            className="inline-flex items-center px-3 py-1.5 border border-transparent text-sm font-medium rounded-md text-white bg-primary-600 hover:bg-primary-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-primary-500 ml-4"
+                            className="inline-flex items-center px-3 py-1.5 border border-transparent text-sm font-medium rounded-md text-white bg-primary-600 hover:bg-primary-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-primary-500"
                             title="View Family Details"
                           >
                             <EyeIcon className="h-4 w-4 mr-1" />
@@ -391,10 +523,25 @@ export default function Accounts() {
                       </td>
                     </tr>
                     {/* Account Rows (shown when expanded) */}
-                    {isExpanded && familyAccounts.map((account) => (
+                    {isExpanded && familyAccounts.map((account) => {
+                      const negativeMarginCount = getNegativeMarginCount(account.id);
+                      const accountSummary = allAccountsSummary?.[account.id];
+                      const maxProfit = accountSummary?.summary?.totalMarketValue || 0;
+                      const availableMargin = calculateCustomMargin(account.id);
+                      const usedMargin = getUsedMargin(account.id);
+                      const totalMargin = availableMargin + usedMargin;
+                      const percentage = totalMargin > 0 ? (-maxProfit / totalMargin) * 100 : 0;
+                      
+                      return (
                       <tr key={account.id} className="hover:bg-gray-50">
                         <td className="px-6 py-4 whitespace-nowrap pl-12">
                           <div className="text-sm font-medium text-gray-900">{account.name}</div>
+                        </td>
+                        <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
+                          <div>{formatCurrency(-maxProfit)}</div>
+                          <div className="text-xs text-gray-500">
+                            ({percentage.toFixed(2)}%)
+                          </div>
                         </td>
                         <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
                           {account.lastSync ? (
@@ -407,6 +554,16 @@ export default function Accounts() {
                               <div>Never</div>
                               <div className="text-xs text-gray-500">Not synced</div>
                             </div>
+                          )}
+                        </td>
+                        <td className="px-6 py-4 whitespace-nowrap text-sm">
+                          {negativeMarginCount > 0 ? (
+                            <div className="inline-flex items-center space-x-1 bg-red-100 text-red-600 rounded-full px-2 py-1">
+                              <ExclamationTriangleIcon className="h-4 w-4" />
+                              <span className="text-xs font-semibold">{negativeMarginCount}</span>
+                            </div>
+                          ) : (
+                            <span className="text-xs text-gray-400">—</span>
                           )}
                         </td>
                         <td className="px-6 py-4 whitespace-nowrap text-center text-sm font-medium">
@@ -444,7 +601,7 @@ export default function Accounts() {
                           </button>
                         </td>
                       </tr>
-                    ))}
+                    )})}
                   </Fragment>
                 );
               })}
