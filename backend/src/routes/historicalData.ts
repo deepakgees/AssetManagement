@@ -1,8 +1,11 @@
 import express from 'express';
 import { PrismaClient } from '@prisma/client';
 import axios from 'axios';
-import { downloadLast10YearsMCXGoldData, bulkUploadCommodityData } from '../services/mcxDataService';
+import fs from 'fs';
+import path from 'path';
+import { downloadLast10YearsMCXGoldData, bulkUploadCommodityData, fetchCurrentMCXPrice, fetchMultipleCurrentMCXPrices } from '../services/mcxDataService';
 import { downloadEquityData, bulkDownloadFOStocks, previewBulkDownloadFOStocks, getNSEFOStocksList, getNSEFOStocksCount } from '../services/equityDataService';
+import { fetchCurrentEquityPrice, fetchMultipleCurrentEquityPrices } from '../services/equityPriceService';
 
 const router = express.Router();
 const prisma = new PrismaClient();
@@ -77,12 +80,12 @@ router.get('/commodities/stats', async (req, res) => {
         ]
       });
 
-      // Calculate top 3 falls
+      // Calculate top 4 falls
       const recordsWithPercentChange = records.filter(record => record.percentChange !== null);
       
       const topFalls = recordsWithPercentChange
         .sort((a, b) => (a.percentChange || 0) - (b.percentChange || 0))
-        .slice(0, 3)
+        .slice(0, 4)
         .map(record => ({
           year: record.year,
           month: record.month,
@@ -309,6 +312,72 @@ router.post('/download-mcx-gold', async (req, res) => {
     res.status(500).json({ 
       success: false,
       error: 'Failed to download MCX GOLD data',
+      message: error instanceof Error ? error.message : 'Unknown error occurred'
+    });
+  }
+});
+
+// Get current MCX price for a single commodity
+router.get('/commodities/current-price', async (req, res) => {
+  try {
+    const { url, symbol } = req.query;
+
+    if (!url || !symbol) {
+      return res.status(400).json({
+        success: false,
+        error: 'Missing required parameters',
+        message: 'Both url and symbol query parameters are required'
+      });
+    }
+
+    const price = await fetchCurrentMCXPrice(url as string, symbol as string);
+
+    if (!price) {
+      return res.status(404).json({
+        success: false,
+        error: 'Price not found',
+        message: `Failed to fetch current price for ${symbol} from ${url}`
+      });
+    }
+
+    res.json({
+      success: true,
+      data: price
+    });
+  } catch (error) {
+    console.error('Error fetching current MCX price:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to fetch current price',
+      message: error instanceof Error ? error.message : 'Unknown error occurred'
+    });
+  }
+});
+
+// Get current MCX prices for multiple commodities
+router.post('/commodities/current-prices', async (req, res) => {
+  try {
+    const { commodityUrls } = req.body;
+
+    if (!commodityUrls || typeof commodityUrls !== 'object') {
+      return res.status(400).json({
+        success: false,
+        error: 'Invalid request body',
+        message: 'Request body must contain commodityUrls object with symbol: url mapping'
+      });
+    }
+
+    const prices = await fetchMultipleCurrentMCXPrices(commodityUrls);
+
+    res.json({
+      success: true,
+      data: prices
+    });
+  } catch (error) {
+    console.error('Error fetching current MCX prices:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to fetch current prices',
       message: error instanceof Error ? error.message : 'Unknown error occurred'
     });
   }
@@ -868,11 +937,11 @@ router.get('/equity-stats', async (req, res) => {
             });
           }
 
-          // Get top 5 falls
+          // Get top 4 falls
           topFalls.push(...monthlyChanges
             .filter(change => change.percentChange < 0)
             .sort((a, b) => a.percentChange - b.percentChange)
-            .slice(0, 5)
+            .slice(0, 4)
           );
         }
 
@@ -976,10 +1045,9 @@ router.get('/option-chain/:symbol', async (req, res) => {
 
       const optionChainData = response.data;
       
-      // Find the put option closest to the safe PE Price
-      let closestPutPremium = null;
-      let closestStrike = null;
-      let minDifference = Infinity;
+      // Find the nearest lower PE strike (highest strike that is still lower than safe PE Price)
+      let nearestLowerPutPremium = null;
+      let nearestLowerStrike = null;
 
       if (optionChainData && optionChainData.records && optionChainData.records.data) {
         const records = optionChainData.records.data;
@@ -991,22 +1059,17 @@ router.get('/option-chain/:symbol', async (req, res) => {
             const lastPrice = record.PE.lastPrice || record.PE.askPrice || record.PE.bidPrice || 0;
             
             if (lastPrice > 0) {
-              // Calculate difference from safe PE Price
-              const difference = safePE ? Math.abs(strikePrice - safePE) : strikePrice;
-              
-              // If we have a safe PE Price, find the closest strike
-              // Otherwise, find the lowest strike with a premium
               if (safePE) {
-                if (difference < minDifference) {
-                  minDifference = difference;
-                  closestPutPremium = lastPrice;
-                  closestStrike = strikePrice;
+                // Find the highest strike that is still lower than safe PE Price
+                if (strikePrice < safePE && (nearestLowerStrike === null || strikePrice > nearestLowerStrike)) {
+                  nearestLowerPutPremium = lastPrice;
+                  nearestLowerStrike = strikePrice;
                 }
               } else {
                 // If no safe PE Price provided, find the lowest strike with premium
-                if (strikePrice < (closestStrike || Infinity)) {
-                  closestPutPremium = lastPrice;
-                  closestStrike = strikePrice;
+                if (nearestLowerStrike === null || strikePrice < nearestLowerStrike) {
+                  nearestLowerPutPremium = lastPrice;
+                  nearestLowerStrike = strikePrice;
                 }
               }
             }
@@ -1014,15 +1077,96 @@ router.get('/option-chain/:symbol', async (req, res) => {
         }
       }
 
-      res.json({
+      const result = {
         symbol,
         safePEPrice: safePEPrice ? parseFloat(safePEPrice as string) : null,
-        premium: closestPutPremium,
-        strikePrice: closestStrike,
-        found: closestPutPremium !== null,
+        premium: nearestLowerPutPremium,
+        strikePrice: nearestLowerStrike,
+        found: nearestLowerPutPremium !== null,
+        timestamp: new Date().toISOString(),
+      };
+
+      // Log the option premium data to file
+      try {
+        const logsDir = path.join(process.cwd(), 'logs');
+        if (!fs.existsSync(logsDir)) {
+          fs.mkdirSync(logsDir, { recursive: true });
+        }
+
+        const today = new Date().toISOString().split('T')[0]; // YYYY-MM-DD
+        const logFileName = `option-premiums-${today}.json`;
+        const logFilePath = path.join(logsDir, logFileName);
+
+        // Read existing log file or create new array
+        let logData: any[] = [];
+        if (fs.existsSync(logFilePath)) {
+          try {
+            const existingData = fs.readFileSync(logFilePath, 'utf-8');
+            logData = JSON.parse(existingData);
+          } catch (error) {
+            console.error('Error reading existing log file:', error);
+            logData = [];
+          }
+        }
+
+        // Add new entry
+        logData.push(result);
+
+        // Write back to file
+        fs.writeFileSync(logFilePath, JSON.stringify(logData, null, 2), 'utf-8');
+        console.log(`Option premium data logged for ${symbol} to ${logFilePath}`);
+      } catch (logError) {
+        console.error(`Error logging option premium data for ${symbol}:`, logError);
+        // Don't fail the request if logging fails
+      }
+
+      res.json({
+        symbol: result.symbol,
+        safePEPrice: result.safePEPrice,
+        premium: result.premium,
+        strikePrice: result.strikePrice,
+        found: result.found,
       });
     } catch (nseError: any) {
       console.error(`Error fetching option chain for ${symbol}:`, nseError.message);
+      
+      // Log error to file as well
+      try {
+        const logsDir = path.join(process.cwd(), 'logs');
+        if (!fs.existsSync(logsDir)) {
+          fs.mkdirSync(logsDir, { recursive: true });
+        }
+
+        const today = new Date().toISOString().split('T')[0];
+        const logFileName = `option-premiums-${today}.json`;
+        const logFilePath = path.join(logsDir, logFileName);
+
+        let logData: any[] = [];
+        if (fs.existsSync(logFilePath)) {
+          try {
+            const existingData = fs.readFileSync(logFilePath, 'utf-8');
+            logData = JSON.parse(existingData);
+          } catch (error) {
+            logData = [];
+          }
+        }
+
+        // Log error entry
+        logData.push({
+          symbol,
+          safePEPrice: safePEPrice ? parseFloat(safePEPrice as string) : null,
+          premium: null,
+          strikePrice: null,
+          found: false,
+          error: nseError.message,
+          timestamp: new Date().toISOString(),
+        });
+
+        fs.writeFileSync(logFilePath, JSON.stringify(logData, null, 2), 'utf-8');
+      } catch (logError) {
+        console.error(`Error logging error data for ${symbol}:`, logError);
+      }
+
       res.status(500).json({
         error: 'Failed to fetch option chain data from NSE',
         message: nseError.response?.data?.message || nseError.message,
@@ -1038,6 +1182,40 @@ router.get('/option-chain/:symbol', async (req, res) => {
       error: 'Failed to fetch option chain data',
       message: error instanceof Error ? error.message : 'Unknown error occurred'
     });
+  }
+});
+
+// Get current equity price for a single symbol
+router.get('/equities/current-price', async (req, res) => {
+  try {
+    const { symbol } = req.query;
+    if (!symbol || typeof symbol !== 'string') {
+      return res.status(400).json({ success: false, error: 'Symbol is required' });
+    }
+    const priceData = await fetchCurrentEquityPrice(symbol);
+    if (priceData) {
+      res.json({ success: true, data: priceData });
+    } else {
+      res.status(404).json({ success: false, error: `Could not fetch current price for ${symbol}` });
+    }
+  } catch (error) {
+    console.error('Error fetching current equity price:', error);
+    res.status(500).json({ success: false, error: 'Failed to fetch current equity price', message: error instanceof Error ? error.message : 'Unknown error occurred' });
+  }
+});
+
+// Get current equity prices for multiple symbols
+router.post('/equities/current-prices', async (req, res) => {
+  try {
+    const { symbols } = req.body;
+    if (!symbols || !Array.isArray(symbols)) {
+      return res.status(400).json({ success: false, error: 'symbols array is required' });
+    }
+    const prices = await fetchMultipleCurrentEquityPrices(symbols);
+    res.json({ success: true, data: prices });
+  } catch (error) {
+    console.error('Error fetching multiple current equity prices:', error);
+    res.status(500).json({ success: false, error: 'Failed to fetch multiple current equity prices', message: error instanceof Error ? error.message : 'Unknown error occurred' });
   }
 });
 

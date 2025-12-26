@@ -3,6 +3,18 @@ import { PrismaClient } from '@prisma/client';
 
 const prisma = new PrismaClient();
 
+export interface CurrentMCXPrice {
+  symbol: string;
+  lastTrade: number;
+  change: number;
+  changePercent: number;
+  high: number;
+  low: number;
+  open: number;
+  timestamp: string;
+  lastTradeTime?: string;
+}
+
 export interface MCXGoldData {
   date: string;
   price: number;
@@ -306,4 +318,176 @@ export async function bulkUploadCommodityData(
     total: dataWithPercentChange.length,
     errors
   };
+}
+
+/**
+ * Fetch current price of a commodity from MCX Live website
+ * @param url - The MCX Live URL for the commodity (e.g., 'https://mcxlive.org/gold/')
+ * @param symbol - The commodity symbol (e.g., 'GOLD', 'SILVER', 'COPPER')
+ * @returns Current price data or null if fetch fails
+ */
+export async function fetchCurrentMCXPrice(url: string, symbol: string): Promise<CurrentMCXPrice | null> {
+  try {
+    const response = await axios.get(url, {
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+        'Accept-Language': 'en-US,en;q=0.5',
+      },
+      timeout: 10000,
+    });
+
+    const html = response.data;
+
+    // Helper function to extract number from table cell
+    const extractNumber = (label: string, html: string): number | null => {
+      // Try multiple patterns to find the value
+      const patterns = [
+        new RegExp(`${label}[\\s\\S]*?<td[^>]*>([\\d,]+(?:\\.[\\d]+)?)<\\/td>`, 'i'),
+        new RegExp(`${label}[\\s\\S]*?<td[^>]*>([\\d,]+(?:\\.[\\d]+)?)`, 'i'),
+        new RegExp(`<td[^>]*>${label}<\\/td>[\\s\\S]*?<td[^>]*>([\\d,]+(?:\\.[\\d]+)?)<\\/td>`, 'i'),
+      ];
+
+      for (const pattern of patterns) {
+        const match = html.match(pattern);
+        if (match && match[1]) {
+          const value = match[1].replace(/,/g, '').trim();
+          const num = parseFloat(value);
+          if (!isNaN(num)) {
+            return num;
+          }
+        }
+      }
+      return null;
+    };
+
+    // Parse Last Trade price - specifically target the "Last Trade" value from the table
+    // HTML structure:
+    // <table class="main-table bold">
+    //   <thead><tr><td>Last Trade</td><td>Change</td><td>Change in %</td></tr></thead>
+    //   <tbody><tr><td class="main-change positive"><i class="fa fa-caret-up"></i> 138,179</td>...</tr></tbody>
+    // </table>
+    let lastTrade: number | null = null;
+    
+    // Pattern 1: Look for the specific table structure with "main-table bold" class
+    // Find the table, then find "Last Trade" in thead, then get the first td value from tbody
+    const tableMatch = html.match(/<table[^>]*class="main-table bold"[^>]*>[\s\S]*?Last Trade[\s\S]*?<tbody>[\s\S]*?<td[^>]*class="main-change[^"]*"[^>]*>[\s\S]*?(\d{1,3}(?:,\d{3})*(?:\.\d+)?)/i);
+    if (tableMatch && tableMatch[1]) {
+      const value = tableMatch[1].replace(/,/g, '').trim();
+      const num = parseFloat(value);
+      if (!isNaN(num) && num > 0) {
+        lastTrade = num;
+      }
+    }
+    
+    // Pattern 2: More specific - find "Last Trade" in thead, then get the first number in tbody row
+    if (!lastTrade) {
+      const lastTradeHeaderMatch = html.match(/<td[^>]*>Last Trade<\/td>/i);
+      if (lastTradeHeaderMatch) {
+        const headerIndex = html.indexOf(lastTradeHeaderMatch[0]);
+        // Look for tbody after the header
+        const tbodySection = html.substring(headerIndex);
+        const tbodyMatch = tbodySection.match(/<tbody>[\s\S]*?<td[^>]*class="main-change[^"]*"[^>]*>[\s\S]*?(\d{1,3}(?:,\d{3})*(?:\.\d+)?)/i);
+        if (tbodyMatch && tbodyMatch[1]) {
+          const value = tbodyMatch[1].replace(/,/g, '').trim();
+          const num = parseFloat(value);
+          if (!isNaN(num) && num > 0) {
+            lastTrade = num;
+          }
+        }
+      }
+    }
+    
+    // Pattern 3: Fallback - find "Last Trade" and get the first number in a td with "main-change" class
+    if (!lastTrade) {
+      const lastTradeIndex = html.indexOf('Last Trade');
+      if (lastTradeIndex !== -1) {
+        const sectionAfter = html.substring(lastTradeIndex, lastTradeIndex + 3000);
+        const mainChangeMatch = sectionAfter.match(/<td[^>]*class="main-change[^"]*"[^>]*>[\s\S]*?(\d{1,3}(?:,\d{3})*(?:\.\d+)?)/i);
+        if (mainChangeMatch && mainChangeMatch[1]) {
+          const value = mainChangeMatch[1].replace(/,/g, '').trim();
+          const num = parseFloat(value);
+          if (!isNaN(num) && num > 0 && num < 2000000) {
+            lastTrade = num;
+          }
+        }
+      }
+    }
+
+    // Parse Change (with +/- sign)
+    const changeMatch = html.match(/Change[\s\S]*?<td[^>]*>([+\-]?[\d,]+(?:\.\d+)?)<\/td>/i);
+    let change: number | null = null;
+    if (changeMatch && changeMatch[1]) {
+      const value = changeMatch[1].replace(/,/g, '').replace(/\+/, '').trim();
+      change = parseFloat(value);
+      if (isNaN(change)) change = null;
+    }
+
+    // Parse Change in %
+    const changePercentMatch = html.match(/Change in %[\s\S]*?<td[^>]*>([+\-]?[\d.]+)%<\/td>/i);
+    let changePercent: number | null = null;
+    if (changePercentMatch && changePercentMatch[1]) {
+      const value = changePercentMatch[1].replace(/\+/, '').trim();
+      changePercent = parseFloat(value);
+      if (isNaN(changePercent)) changePercent = null;
+    }
+
+    // Parse High, Low, Open using helper
+    const high = extractNumber('High', html);
+    const low = extractNumber('Low', html);
+    const open = extractNumber('Open', html);
+
+    // Parse Last Trade Time
+    const lastTradeTimeMatch = html.match(/Last Trade on ([\d\s]+(?:AM|PM)[\s\S]*?Market Close)/i);
+    const lastTradeTime = lastTradeTimeMatch ? lastTradeTimeMatch[1].trim() : undefined;
+
+    // Parse timestamp
+    const timestampMatch = html.match(/As on[^<]*?([\d\s]+(?:AM|PM)[^<]*?India Time)/i);
+    const timestamp = timestampMatch ? timestampMatch[1].trim() : new Date().toISOString();
+
+    if (lastTrade === null) {
+      console.error(`Failed to parse price data for ${symbol} from ${url}`);
+      return null;
+    }
+
+    return {
+      symbol,
+      lastTrade,
+      change: change || 0,
+      changePercent: changePercent || 0,
+      high: high || 0,
+      low: low || 0,
+      open: open || 0,
+      timestamp,
+      lastTradeTime,
+    };
+  } catch (error) {
+    console.error(`Error fetching current price for ${symbol} from ${url}:`, error);
+    return null;
+  }
+}
+
+/**
+ * Fetch current prices for multiple commodities
+ * @param commodityUrls - Map of symbol to URL (e.g., { 'GOLD': 'https://mcxlive.org/gold/' })
+ * @returns Map of symbol to current price data
+ */
+export async function fetchMultipleCurrentMCXPrices(
+  commodityUrls: Record<string, string>
+): Promise<Record<string, CurrentMCXPrice | null>> {
+  const results: Record<string, CurrentMCXPrice | null> = {};
+
+  // Fetch all prices in parallel
+  const promises = Object.entries(commodityUrls).map(async ([symbol, url]) => {
+    const price = await fetchCurrentMCXPrice(url, symbol);
+    return { symbol, price };
+  });
+
+  const fetchedPrices = await Promise.all(promises);
+
+  fetchedPrices.forEach(({ symbol, price }) => {
+    results[symbol] = price;
+  });
+
+  return results;
 }

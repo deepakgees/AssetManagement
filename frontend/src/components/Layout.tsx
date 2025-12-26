@@ -29,14 +29,6 @@ const Layout: React.FC<LayoutProps> = ({ children }) => {
   const navigation = [
     { name: 'Accounts', href: '/accounts', icon: UserGroupIcon },
     { 
-      name: 'Current Trades', 
-      icon: ChartBarIcon,
-      children: [
-        { name: 'Holdings', href: '/holdings', icon: HomeIcon },
-        { name: 'Positions', href: '/positions', icon: ChartBarIcon },
-      ]
-    },
-    { 
       name: 'Next Trades', 
       icon: TagIcon,
       children: [

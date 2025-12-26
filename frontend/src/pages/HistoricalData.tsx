@@ -49,6 +49,8 @@ import {
   getCommoditySeasonalData,
   getAllCommoditiesSeasonalData,
   getOptionChainPremium,
+  getMultipleCurrentMCXPrices,
+  getMultipleCurrentEquityPrices,
   type HistoricalData,
   type HistoricalPriceCommodity,
   type CreateHistoricalDataData,
@@ -58,6 +60,8 @@ import {
   type UpdateCommodityData,
   type UpdateEquityData,
   type OptionChainResponse,
+  type CurrentMCXPrice,
+  type CurrentEquityPrice,
 } from '../services/historicalDataService';
 import { getSymbolMargins, updateSafetyMargin, type SymbolMargin } from '../services/symbolMarginsService';
 
@@ -330,6 +334,12 @@ export default function HistoricalData() {
   } | null>(null);
 
   const [showBulkUpload, setShowBulkUpload] = useState(false);
+  const [showOptionPremiumsDialog, setShowOptionPremiumsDialog] = useState(false);
+  
+  // Current MCX prices state
+  const [currentPrices, setCurrentPrices] = useState<Record<string, CurrentMCXPrice | null>>({});
+  // Current equity prices state
+  const [currentEquityPrices, setCurrentEquityPrices] = useState<Record<string, CurrentEquityPrice>>({});
   const [csvFile, setCsvFile] = useState<File | null>(null);
   const [parsedData, setParsedData] = useState<any[]>([]);
   const [uploadSymbol, setUploadSymbol] = useState('');
@@ -340,7 +350,24 @@ export default function HistoricalData() {
   
   // Equity table pagination state
   const [equityCurrentPage, setEquityCurrentPage] = useState(1);
-  const [equityItemsPerPage] = useState(10);
+  const [equityItemsPerPage] = useState(5);
+  
+  // Nifty 50 filter state
+  const [showNifty50Only, setShowNifty50Only] = useState(false);
+  
+  // Nifty 50 stocks list (as of latest update)
+  const NIFTY_50_STOCKS = [
+    'ADANIENT', 'ADANIPORTS', 'APOLLOHOSP', 'ASIANPAINT', 'AXISBANK', 
+    'BAJAJ-AUTO', 'BAJFINANCE', 'BAJAJFINSV', 'BPCL', 'BHARTIARTL', 
+    'BRITANNIA', 'CIPLA', 'COALINDIA', 'DRREDDY', 'EICHERMOT', 
+    'GRASIM', 'HCLTECH', 'HDFCBANK', 'HDFCLIFE', 'HEROMOTOCO', 
+    'HINDALCO', 'HINDUNILVR', 'ICICIBANK', 'ITC', 'INDUSINDBK', 
+    'INFY', 'JSWSTEEL', 'KOTAKBANK', 'LT', 'LTIM', 
+    'MARUTI', 'NESTLEIND', 'NTPC', 'ONGC', 'POWERGRID', 
+    'RELIANCE', 'SBILIFE', 'SBIN', 'SUNPHARMA', 'TATACONSUM', 
+    'TATAMOTORS', 'TATASTEEL', 'TCS', 'TECHM', 'TITAN', 
+    'ULTRACEMCO', 'UPL', 'WIPRO'
+  ];
   
   // Equity table sorting state
   const [equitySortField, setEquitySortField] = useState<string>('symbol');
@@ -593,6 +620,44 @@ export default function HistoricalData() {
     hasNextPage: commoditiesResponse.hasNextPage,
     hasPreviousPage: commoditiesResponse.hasPreviousPage
   } : null;
+
+  // Commodity URL mapping for MCX Live
+  const commodityUrls: Record<string, string> = {
+    'GOLD': 'https://mcxlive.org/gold/',
+    'SILVER': 'https://mcxlive.org/silver/',
+    'COPPER': 'https://mcxlive.org/copper/',
+    'CRUDEOIL': 'https://mcxlive.org/crude-oil/',
+    'NATURALGAS': 'https://mcxlive.org/natural-gas/',
+  };
+
+  // Fetch current MCX prices for commodities
+  useEffect(() => {
+    if (activeTab === 'commodities' && commodityStats && commodityStats.length > 0) {
+      const fetchPrices = async () => {
+        // Filter to only fetch prices for commodities that have URLs
+        const symbolsToFetch = commodityStats
+          .map(c => c.symbol)
+          .filter(symbol => commodityUrls[symbol]);
+        
+        if (symbolsToFetch.length > 0) {
+          const urlsToFetch: Record<string, string> = {};
+          symbolsToFetch.forEach(symbol => {
+            urlsToFetch[symbol] = commodityUrls[symbol];
+          });
+          
+          try {
+            const prices = await getMultipleCurrentMCXPrices(urlsToFetch);
+            setCurrentPrices(prices);
+          } catch (error) {
+            console.error('Error fetching current prices:', error);
+          }
+        }
+      };
+      
+      fetchPrices();
+    }
+  }, [activeTab, commodityStats]);
+
 
   // Fetch all commodity historical data for calculating previousMonthReturn
   const { data: allCommoditiesHistoricalData } = useQuery({
@@ -878,6 +943,37 @@ export default function HistoricalData() {
     return Math.round((positiveCount / monthData.length) * 100);
   }, [allEquitySeasonalData, equitySeasonalData]);
 
+  // Fetch current equity prices
+  useEffect(() => {
+    if (activeTab === 'equities' && equityStatsData && equityStatsData.length > 0) {
+      const fetchEquityPrices = async () => {
+        const symbolsToFetch = equityStatsData.map(stock => stock.symbol);
+        
+        if (symbolsToFetch.length > 0) {
+          try {
+            console.log('Fetching equity prices for symbols:', symbolsToFetch);
+            const prices = await getMultipleCurrentEquityPrices(symbolsToFetch);
+            console.log('Received equity prices:', prices);
+            const pricesMap: Record<string, CurrentEquityPrice> = {};
+            prices.forEach(price => {
+              // Use uppercase to ensure consistent matching
+              pricesMap[price.symbol.toUpperCase()] = price;
+            });
+            console.log('Equity prices map:', pricesMap);
+            setCurrentEquityPrices(pricesMap);
+          } catch (error) {
+            console.error('Error fetching current equity prices:', error);
+          }
+        }
+      };
+      
+      fetchEquityPrices();
+    } else if (activeTab !== 'equities') {
+      // Clear equity prices when switching away from equities tab
+      setCurrentEquityPrices({});
+    }
+  }, [activeTab, equityStatsData]);
+
   // Debug logging
   useEffect(() => {
     if (activeTab === 'equities') {
@@ -1129,9 +1225,9 @@ export default function HistoricalData() {
     // Update state with stored value
     setLastOptionPremiumRefreshState(getLastOptionPremiumRefresh());
 
-    // Set up automatic refresh interval (default: 5 minutes = 300000ms)
+    // Set up automatic refresh interval (default: 12 hours = 43200000ms)
     // Set to null to disable auto-refresh
-    const refreshIntervalMs = optionPremiumRefreshInterval ?? 5 * 60 * 1000; // 5 minutes default
+    const refreshIntervalMs = optionPremiumRefreshInterval ?? 12 * 60 * 60 * 1000; // 12 hours default
     
     let intervalId: NodeJS.Timeout | null = null;
     
@@ -1150,11 +1246,20 @@ export default function HistoricalData() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [equityStatsData, symbolMargins, activeTab]);
 
-  // Then apply pagination to the sorted data
-  const equityTotalPages = Math.ceil((equitySortedData?.length || 0) / equityItemsPerPage);
+  // Apply Nifty 50 filter if enabled
+  const filteredEquityData = useMemo(() => {
+    if (!equitySortedData) return [];
+    if (!showNifty50Only) return equitySortedData;
+    return equitySortedData.filter(stock => 
+      NIFTY_50_STOCKS.includes(stock.symbol.toUpperCase())
+    );
+  }, [equitySortedData, showNifty50Only]);
+
+  // Then apply pagination to the filtered data
+  const equityTotalPages = Math.ceil((filteredEquityData?.length || 0) / equityItemsPerPage);
   const equityStartIndex = (equityCurrentPage - 1) * equityItemsPerPage;
   const equityEndIndex = equityStartIndex + equityItemsPerPage;
-  const equityPaginatedData = equitySortedData?.slice(equityStartIndex, equityEndIndex) || [];
+  const equityPaginatedData = filteredEquityData?.slice(equityStartIndex, equityEndIndex) || [];
 
   // Debug logging for pagination
   useEffect(() => {
@@ -1203,12 +1308,22 @@ export default function HistoricalData() {
       
       if (commodity.latestMonth && allCommoditiesHistoricalData[commodity.symbol]) {
         const historicalData = allCommoditiesHistoricalData[commodity.symbol];
-        const latestIndex = historicalData.findIndex(
-          record => record.year === commodity.latestMonth!.year && record.month === commodity.latestMonth!.month
+        
+        // Calculate the actual previous month (handling year rollover)
+        let prevYear = commodity.latestMonth.year;
+        let prevMonth = commodity.latestMonth.month - 1;
+        
+        if (prevMonth < 1) {
+          prevMonth = 12;
+          prevYear = commodity.latestMonth.year - 1;
+        }
+        
+        // Find the previous month's data
+        const previousMonthData = historicalData.find(
+          record => record.year === prevYear && record.month === prevMonth
         );
         
-        if (latestIndex > 0) {
-          const previousMonthData = historicalData[latestIndex - 1];
+        if (previousMonthData) {
           const percentChange = ((commodity.latestMonth.closingPrice - previousMonthData.closingPrice) / previousMonthData.closingPrice) * 100;
           previousMonthReturn = {
             percentChange,
@@ -1931,6 +2046,26 @@ export default function HistoricalData() {
     return { year, month: month + 1 };
   };
 
+  // Helper function to get previous month from current date
+  const getPreviousMonthLabel = (): string => {
+    const now = new Date();
+    const previousMonth = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+    return previousMonth.toLocaleDateString('en-US', { month: 'short', year: '2-digit' }).toUpperCase();
+  };
+
+  // Helper function to get current month label
+  const getCurrentMonthLabel = (): string => {
+    const now = new Date();
+    return now.toLocaleDateString('en-US', { month: 'short', year: '2-digit' }).toUpperCase();
+  };
+
+  // Helper function to get next month label
+  const getNextMonthLabel = (): string => {
+    const now = new Date();
+    const nextMonth = new Date(now.getFullYear(), now.getMonth() + 1, 1);
+    return nextMonth.toLocaleDateString('en-US', { month: 'short', year: '2-digit' }).toUpperCase();
+  };
+
   // Helper function to calculate safe put option strike price
   const calculateSafePE = (closingPrice: number, safetyMargin: number): number => {
     return closingPrice * (1 - safetyMargin / 100);
@@ -1975,10 +2110,38 @@ export default function HistoricalData() {
   return (
     <Layout>
       <div className="mb-6 flex justify-between items-center">
-        <h1 className="text-2xl font-bold text-gray-900">Historical Data Management</h1>
+        <h1 className="text-2xl font-bold text-gray-900">Historical Data</h1>
         <div className="flex space-x-3">
           {activeTab === 'equities' && (
             <>
+              {/* Nifty 50 Filter Button */}
+              <button
+                onClick={() => {
+                  setShowNifty50Only(!showNifty50Only);
+                  setEquityCurrentPage(1); // Reset to first page when filter changes
+                }}
+                className={`inline-flex items-center px-4 py-2 border border-gray-300 rounded-md text-sm font-medium transition-colors ${
+                  showNifty50Only
+                    ? 'bg-primary-600 text-white border-primary-600 hover:bg-primary-700'
+                    : 'bg-white text-gray-700 hover:bg-gray-50'
+                }`}
+              >
+                {showNifty50Only ? (
+                  <>
+                    <svg className="h-4 w-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+                    </svg>
+                    Nifty 50 Only
+                  </>
+                ) : (
+                  <>
+                    <svg className="h-4 w-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 12h16M4 18h16" />
+                    </svg>
+                    Nifty 50
+                  </>
+                )}
+              </button>
               <button
                 onClick={() => {
                   setOptionPremiums({}); // Clear cache to force refresh
@@ -2049,7 +2212,7 @@ export default function HistoricalData() {
       </div>
 
       {/* Tabs */}
-      <div className="mb-6">
+      <div className="mb-2">
         <div className="border-b border-gray-200">
           <nav className="-mb-px flex space-x-8">
             <button
@@ -2267,16 +2430,9 @@ export default function HistoricalData() {
       {/* F&O Equity Stocks Table */}
       {activeTab === 'equities' && (
         <div className="mb-6">
-          <div className="flex justify-between items-center mb-4">
-            <h3 className="text-lg font-medium text-gray-900">NSE F&O Equity Stocks</h3>
-            <div className="text-sm text-gray-500">
-              Showing {equityStatsData?.length || 0} of {foStocksCount} stocks
-            </div>
-          </div>
-
           {/* Equity Table Pagination - Top */}
           {equityTotalPages > 1 && (
-            <div className="bg-white px-4 py-3 flex items-center justify-between border-t border-gray-200 sm:px-6 mb-4">
+            <div className="bg-white px-4 py-3 flex items-center justify-between border-t border-gray-200 sm:px-6 mb-2">
               <div className="flex-1 flex justify-between sm:hidden">
                 <button
                   onClick={() => setEquityCurrentPage(Math.max(1, equityCurrentPage - 1))}
@@ -2300,11 +2456,14 @@ export default function HistoricalData() {
                     <span className="font-medium">{equityStartIndex + 1}</span>
                     {' '}to{' '}
                     <span className="font-medium">
-                      {Math.min(equityEndIndex, equityStatsData?.length || 0)}
+                      {Math.min(equityEndIndex, filteredEquityData?.length || 0)}
                     </span>
                     {' '}of{' '}
-                    <span className="font-medium">{equityStatsData?.length || 0}</span>
+                    <span className="font-medium">{filteredEquityData?.length || 0}</span>
                     {' '}results
+                    {showNifty50Only && (
+                      <span className="ml-2 text-xs text-primary-600">(Nifty 50 filtered)</span>
+                    )}
                   </p>
                 </div>
                 <div>
@@ -2363,17 +2522,33 @@ export default function HistoricalData() {
           {/* Equity Stocks Table */}
           <div className="bg-white shadow overflow-hidden sm:rounded-md">
             <div className="overflow-x-auto">
-              <table className="min-w-full divide-y divide-gray-200">
+              <table className="min-w-full divide-y divide-gray-200 border-collapse">
                 <thead className="bg-gray-50">
                   <tr>
-                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                    <th className="px-3 py-2 text-center text-xs font-medium text-gray-700 uppercase tracking-wider border-r border-gray-300" colSpan={1}></th>
+                    <th className="px-3 py-2 text-center text-xs font-medium text-gray-700 uppercase tracking-wider border-r border-gray-300" colSpan={1}></th>
+                    <th className="px-3 py-2 text-center text-xs font-medium text-gray-700 uppercase tracking-wider border-r border-gray-300" colSpan={1}></th>
+                    <th className="px-3 py-2 text-center text-xs font-medium text-gray-700 uppercase tracking-wider border-r border-gray-300" colSpan={1}></th>
+                    <th className="px-3 py-2 text-center text-xs font-medium text-gray-700 uppercase tracking-wider border-r border-gray-300" colSpan={2}>
+                      Previous Month: {getPreviousMonthLabel()}
+                    </th>
+                    <th className="px-3 py-2 text-center text-xs font-medium text-gray-700 uppercase tracking-wider border-r border-gray-300" colSpan={2}>
+                      Current Month: {getCurrentMonthLabel()}
+                    </th>
+                    <th className="px-3 py-2 text-center text-xs font-medium text-gray-700 uppercase tracking-wider border-r border-gray-300" colSpan={2}>
+                      Next Month: {getNextMonthLabel()}
+                    </th>
+                    <th className="px-3 py-2 text-center text-xs font-medium text-gray-700 uppercase tracking-wider" colSpan={1}></th>
+                  </tr>
+                  <tr>
+                    <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider border-r border-gray-300">
                       <span className="sr-only">Expand</span>
                     </th>
                     <th 
-                      className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100"
+                      className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100 border-r border-gray-300"
                       onClick={() => handleEquitySort('symbol')}
                     >
-                      <div className="flex items-center space-x-1">
+                      <div className="flex items-center space-x-0.5">
                         <span>Symbol</span>
                         {equitySortField === 'symbol' && (
                           equitySortDirection === 'asc' ? 
@@ -2383,36 +2558,10 @@ export default function HistoricalData() {
                       </div>
                     </th>
                     <th 
-                      className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100"
-                      onClick={() => handleEquitySort('closingPrice')}
-                    >
-                      <div className="flex items-center space-x-1">
-                        <span>Previous Month Closing Price</span>
-                        {equitySortField === 'closingPrice' && (
-                          equitySortDirection === 'asc' ? 
-                            <ChevronUpIcon className="h-4 w-4" /> : 
-                            <ChevronDownIcon className="h-4 w-4" />
-                        )}
-                      </div>
-                    </th>
-                    <th 
-                      className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100"
-                      onClick={() => handleEquitySort('previousMonthReturn')}
-                    >
-                      <div className="flex items-center space-x-1">
-                        <span>Previous Month Return</span>
-                        {equitySortField === 'previousMonthReturn' && (
-                          equitySortDirection === 'asc' ? 
-                            <ChevronUpIcon className="h-4 w-4" /> : 
-                            <ChevronDownIcon className="h-4 w-4" />
-                        )}
-                      </div>
-                    </th>
-                    <th 
-                      className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100"
+                      className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100 border-r border-gray-300"
                       onClick={() => handleEquitySort('safetyMargin')}
                     >
-                      <div className="flex items-center space-x-1">
+                      <div className="flex items-center space-x-0.5">
                         <span>Safety Margin</span>
                         {equitySortField === 'safetyMargin' && (
                           equitySortDirection === 'asc' ? 
@@ -2421,13 +2570,18 @@ export default function HistoricalData() {
                         )}
                       </div>
                     </th>
+                    <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider border-r border-gray-300">
+                      <div className="flex items-center space-x-0.5">
+                        <span>Current Price</span>
+                      </div>
+                    </th>
                     <th 
-                      className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100"
-                      onClick={() => handleEquitySort('safePE')}
+                      className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100 border-r border-gray-300"
+                      onClick={() => handleEquitySort('closingPrice')}
                     >
-                      <div className="flex items-center space-x-1">
-                        <span>Safe PE Price</span>
-                        {equitySortField === 'safePE' && (
+                      <div className="flex items-center space-x-0.5">
+                        <span>Closing Price</span>
+                        {equitySortField === 'closingPrice' && (
                           equitySortDirection === 'asc' ? 
                             <ChevronUpIcon className="h-4 w-4" /> : 
                             <ChevronDownIcon className="h-4 w-4" />
@@ -2435,12 +2589,12 @@ export default function HistoricalData() {
                       </div>
                     </th>
                     <th 
-                      className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100"
-                      onClick={() => handleEquitySort('optionPremium')}
+                      className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100 border-r border-gray-300"
+                      onClick={() => handleEquitySort('previousMonthReturn')}
                     >
-                      <div className="flex items-center space-x-1">
-                        <span>Option Premium (PE @ Safe PE)</span>
-                        {equitySortField === 'optionPremium' && (
+                      <div className="flex items-center space-x-0.5">
+                        <span>Returns</span>
+                        {equitySortField === 'previousMonthReturn' && (
                           equitySortDirection === 'asc' ? 
                             <ChevronUpIcon className="h-4 w-4" /> : 
                             <ChevronDownIcon className="h-4 w-4" />
@@ -2448,11 +2602,11 @@ export default function HistoricalData() {
                       </div>
                     </th>
                     <th 
-                      className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100"
+                      className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100 border-r border-gray-300"
                       onClick={() => handleEquitySort('successRate')}
                     >
-                      <div className="flex items-center space-x-1">
-                        <span>Current Month Success Rate</span>
+                      <div className="flex items-center space-x-0.5">
+                        <span>Success Rate</span>
                         {equitySortField === 'successRate' && (
                           equitySortDirection === 'asc' ? 
                             <ChevronUpIcon className="h-4 w-4" /> : 
@@ -2461,11 +2615,50 @@ export default function HistoricalData() {
                       </div>
                     </th>
                     <th 
-                      className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100"
+                      className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100 border-r border-gray-300"
+                      onClick={() => handleEquitySort('safePE')}
+                    >
+                      <div className="flex items-center space-x-0.5">
+                        <span>Safe PE (Strike/Premium)</span>
+                        {equitySortField === 'safePE' && (
+                          equitySortDirection === 'asc' ? 
+                            <ChevronUpIcon className="h-4 w-4" /> : 
+                            <ChevronDownIcon className="h-4 w-4" />
+                        )}
+                      </div>
+                    </th>
+                    <th 
+                      className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100 border-r border-gray-300"
+                      onClick={() => handleEquitySort('successRate')}
+                    >
+                      <div className="flex items-center space-x-0.5">
+                        <span>Success Rate</span>
+                        {equitySortField === 'successRate' && (
+                          equitySortDirection === 'asc' ? 
+                            <ChevronUpIcon className="h-4 w-4" /> : 
+                            <ChevronDownIcon className="h-4 w-4" />
+                        )}
+                      </div>
+                    </th>
+                    <th 
+                      className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100 border-r border-gray-300"
+                      onClick={() => handleEquitySort('safePE')}
+                    >
+                      <div className="flex items-center space-x-0.5">
+                        <span>Safe PE (Strike/Premium)</span>
+                        {equitySortField === 'safePE' && (
+                          equitySortDirection === 'asc' ? 
+                            <ChevronUpIcon className="h-4 w-4" /> : 
+                            <ChevronDownIcon className="h-4 w-4" />
+                        )}
+                      </div>
+                    </th>
+                    <th 
+                      className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100"
                       onClick={() => handleEquitySort('topFalls')}
                     >
-                      <div className="flex items-center space-x-1">
-                        <span>Top 5 Falls</span>
+                      <div className="flex items-center space-x-0.5">
+                        <span>Top 4 Falls</span>
                         {equitySortField === 'topFalls' && (
                           equitySortDirection === 'asc' ? 
                             <ChevronUpIcon className="h-4 w-4" /> : 
@@ -2479,7 +2672,7 @@ export default function HistoricalData() {
                   {equityPaginatedData?.map((stock) => (
                     <>
                       <tr key={stock.symbol} className="hover:bg-gray-50">
-                        <td className="px-6 py-4 whitespace-nowrap">
+                        <td className="px-3 py-3 whitespace-nowrap border-r border-gray-300">
                           <button
                             onClick={() => handleEquityRowExpand(stock.symbol)}
                             className="text-gray-400 hover:text-gray-600 transition-colors"
@@ -2492,13 +2685,53 @@ export default function HistoricalData() {
                             )}
                           </button>
                         </td>
-                        <td className="px-6 py-4 whitespace-nowrap">
+                        <td className="px-3 py-3 whitespace-nowrap border-r border-gray-300">
                           <div className="flex items-center">
-                            <ChartBarIcon className="h-4 w-4 text-gray-400 mr-2" />
+                            <ChartBarIcon className="h-4 w-4 text-gray-400 mr-1" />
                             <div className="text-sm font-medium text-gray-900">{stock.symbol}</div>
                           </div>
                         </td>
-                      <td className="px-6 py-4 whitespace-nowrap">
+                        <td className="px-3 py-3 whitespace-nowrap border-r border-gray-300">
+                          <div className="flex items-center space-x-1">
+                            <span className={`text-sm font-medium ${
+                              getSafetyMarginForSymbol(stock.symbol, 'equity') === 'NA' 
+                                ? 'text-gray-500' 
+                                : 'text-blue-700'
+                            }`}>
+                              {getSafetyMarginForSymbol(stock.symbol, 'equity')}
+                            </span>
+                            <button
+                              onClick={() => {
+                                const currentValue = symbolMargins?.find(
+                                  (sm: SymbolMargin) => sm.symbol.toLowerCase() === stock.symbol.toLowerCase() && sm.symbolType === 'equity'
+                                )?.safetyMargin || null;
+                                handleEditSafetyMargin(stock.symbol, currentValue);
+                              }}
+                              className="text-gray-400 hover:text-blue-600 transition-colors"
+                              title="Edit Safety Margin"
+                            >
+                              <PencilIcon className="h-4 w-4" />
+                            </button>
+                          </div>
+                        </td>
+                        <td className="px-3 py-3 whitespace-nowrap border-r border-gray-300">
+                          {currentEquityPrices[stock.symbol.toUpperCase()] ? (
+                            <div className="text-sm">
+                              <div className="font-medium text-gray-900">
+                                ₹{formatPrice(currentEquityPrices[stock.symbol.toUpperCase()]!.lastTrade)}
+                              </div>
+                              {currentEquityPrices[stock.symbol.toUpperCase()]!.change !== 0 && (
+                                <div className={`text-xs ${currentEquityPrices[stock.symbol.toUpperCase()]!.change >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+                                  {currentEquityPrices[stock.symbol.toUpperCase()]!.change >= 0 ? '+' : ''}
+                                  {currentEquityPrices[stock.symbol.toUpperCase()]!.changePercent.toFixed(2)}%
+                                </div>
+                              )}
+                            </div>
+                          ) : (
+                            <span className="text-sm text-gray-500">-</span>
+                          )}
+                        </td>
+                        <td className="px-3 py-3 whitespace-nowrap border-r border-gray-300">
                         <div className="text-sm text-gray-900">
                           {stock.latestMonth ? (
                             <>
@@ -2512,7 +2745,7 @@ export default function HistoricalData() {
                           )}
                         </div>
                       </td>
-                      <td className="px-6 py-4 whitespace-nowrap">
+                        <td className="px-3 py-3 whitespace-nowrap border-r border-gray-300">
                         <div className="text-sm">
                           {stock.previousMonthReturn ? (
                             <span className={`font-medium ${stock.previousMonthReturn.percentChange >= 0 ? 'text-green-600' : 'text-red-600'}`}>
@@ -2523,91 +2756,69 @@ export default function HistoricalData() {
                           )}
                         </div>
                       </td>
-                      <td className="px-6 py-4 whitespace-nowrap">
-                        <div className="flex items-center space-x-2">
+                        <td className="px-3 py-3 whitespace-nowrap border-r border-gray-300">
+                          {stock.latestMonth ? (
                           <span className={`text-sm font-medium ${
-                            getSafetyMarginForSymbol(stock.symbol, 'equity') === 'NA' 
-                              ? 'text-gray-500' 
-                              : 'text-blue-700'
-                          }`}>
-                            {getSafetyMarginForSymbol(stock.symbol, 'equity')}
+                              (() => {
+                                const now = new Date();
+                                const currentMonthNum = now.getMonth() + 1; // JavaScript months are 0-based
+                                const successRate = getEquitySuccessRateForMonth(stock.symbol, currentMonthNum);
+                                return successRate >= 60 ? 'text-green-700' : 
+                                       successRate >= 40 ? 'text-yellow-600' : 
+                                       'text-red-600';
+                              })()
+                            }`}>
+                              {(() => {
+                                const now = new Date();
+                                const currentMonthNum = now.getMonth() + 1; // JavaScript months are 0-based
+                                return getEquitySuccessRateForMonth(stock.symbol, currentMonthNum);
+                              })()}%
                           </span>
-                          <button
-                            onClick={() => {
-                              const currentValue = symbolMargins?.find(
-                                (sm: SymbolMargin) => sm.symbol.toLowerCase() === stock.symbol.toLowerCase() && sm.symbolType === 'equity'
-                              )?.safetyMargin || null;
-                              handleEditSafetyMargin(stock.symbol, currentValue);
-                            }}
-                            className="text-gray-400 hover:text-blue-600 transition-colors"
-                            title="Edit Safety Margin"
-                          >
-                            <PencilIcon className="h-4 w-4" />
-                          </button>
-                        </div>
+                          ) : (
+                            <span className="text-sm text-gray-500">No data</span>
+                          )}
                       </td>
-                      <td className="px-6 py-4 whitespace-nowrap">
+                        <td className="px-3 py-3 whitespace-nowrap border-r border-gray-300">
                         {stock.latestMonth ? (
                           <span className={`text-sm font-medium ${
                             (() => {
+                              const optionData = optionPremiums[stock.symbol];
                               const safetyMargin = symbolMargins?.find(
                                 (sm: SymbolMargin) => sm.symbol.toLowerCase() === stock.symbol.toLowerCase() && sm.symbolType === 'equity'
                               );
-                              return safetyMargin ? 'text-green-700' : 'text-gray-500';
+                              return (optionData?.found || (safetyMargin && safetyMargin.safetyMargin)) ? 'text-green-700' : 'text-gray-500';
                             })()
                           }`}>
                             {(() => {
+                              const optionData = optionPremiums[stock.symbol];
                               const safetyMargin = symbolMargins?.find(
                                 (sm: SymbolMargin) => sm.symbol.toLowerCase() === stock.symbol.toLowerCase() && sm.symbolType === 'equity'
                               );
+                              
+                              // Calculate safe PE strike from margin if available
+                              let calculatedStrike: number | null = null;
                               if (safetyMargin && safetyMargin.safetyMargin) {
-                                const safePE = calculateSafePE(stock.latestMonth.closingPrice, safetyMargin.safetyMargin);
-                                return `₹${formatPrice(safePE)}`;
+                                calculatedStrike = calculateSafePE(stock.latestMonth.closingPrice, safetyMargin.safetyMargin);
                               }
-                              return 'NA';
+                              
+                              // Use option chain strike if available, otherwise use calculated strike
+                              const strikePrice = optionData?.strikePrice ?? calculatedStrike;
+                              const premium = optionData?.premium ?? null;
+                              
+                              if (strikePrice !== null) {
+                                const strikeDisplay = `₹${formatPrice(strikePrice)}`;
+                                const premiumDisplay = premium !== null ? `₹${formatPrice(premium)}` : 'NA';
+                                return `${strikeDisplay}/${premiumDisplay}`;
+                              }
+                              
+                              return 'NA/NA';
                             })()}
                           </span>
                         ) : (
                           <span className="text-sm text-gray-500">No data</span>
                         )}
                       </td>
-                      <td className="px-6 py-4 whitespace-nowrap">
-                        {(() => {
-                          const optionData = optionPremiums[stock.symbol];
-                          const isLoading = loadingOptionPremiums.has(stock.symbol);
-                          
-                          if (isLoading) {
-                            return (
-                              <span className="text-sm text-gray-500">
-                                <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-gray-900 inline-block mr-2"></div>
-                                Loading...
-                              </span>
-                            );
-                          }
-                          
-                          if (!optionData) {
-                            return <span className="text-sm text-gray-500">-</span>;
-                          }
-                          
-                          if (!optionData.found || !optionData.premium) {
-                            return <span className="text-sm text-gray-500">N/A</span>;
-                          }
-                          
-                          return (
-                            <div className="text-sm">
-                              <div className="font-medium text-green-700">
-                                ₹{formatPrice(optionData.premium)}
-                              </div>
-                              {optionData.strikePrice && (
-                                <div className="text-xs text-gray-500">
-                                  Strike: ₹{formatPrice(optionData.strikePrice)}
-                                </div>
-                              )}
-                            </div>
-                          );
-                        })()}
-                      </td>
-                      <td className="px-6 py-4 whitespace-nowrap">
+                        <td className="px-3 py-3 whitespace-nowrap border-r border-gray-300">
                         {stock.latestMonth ? (
                           <span className={`text-sm font-medium ${
                             (() => {
@@ -2627,7 +2838,46 @@ export default function HistoricalData() {
                           <span className="text-sm text-gray-500">No data</span>
                         )}
                       </td>
-                      <td className="px-6 py-4">
+                        <td className="px-3 py-3 whitespace-nowrap border-r border-gray-300">
+                          {(() => {
+                            // For Next Month Safe PE, use current price if available, otherwise fall back to latest month closing price
+                            const baselinePrice = currentEquityPrices[stock.symbol.toUpperCase()]?.lastTrade || stock.latestMonth?.closingPrice;
+                            
+                            if (!baselinePrice) {
+                              return <span className="text-sm text-gray-500">NA/NA</span>;
+                            }
+                            
+                            const optionData = optionPremiums[stock.symbol];
+                            const safetyMargin = symbolMargins?.find(
+                              (sm: SymbolMargin) => sm.symbol.toLowerCase() === stock.symbol.toLowerCase() && sm.symbolType === 'equity'
+                            );
+                            
+                            // Calculate safe PE strike from margin if available
+                            let calculatedStrike: number | null = null;
+                            if (safetyMargin && safetyMargin.safetyMargin) {
+                              calculatedStrike = calculateSafePE(baselinePrice, safetyMargin.safetyMargin);
+                            }
+                            
+                            // Use option chain strike if available, otherwise use calculated strike
+                            const strikePrice = optionData?.strikePrice ?? calculatedStrike;
+                            const premium = optionData?.premium ?? null;
+                            
+                            if (strikePrice !== null) {
+                              const strikeDisplay = `₹${formatPrice(strikePrice)}`;
+                              const premiumDisplay = premium !== null ? `₹${formatPrice(premium)}` : 'NA';
+                              return (
+                                <span className={`text-sm font-medium ${
+                                  (optionData?.found || (safetyMargin && safetyMargin.safetyMargin)) ? 'text-green-700' : 'text-gray-500'
+                                }`}>
+                                  {strikeDisplay}/{premiumDisplay}
+                                </span>
+                              );
+                            }
+                            
+                            return <span className="text-sm text-gray-500">NA/NA</span>;
+                          })()}
+                        </td>
+                        <td className="px-3 py-3">
                         <div className="text-sm">
                           {stock.topFalls && stock.topFalls.length > 0 ? (
                             <div className="grid grid-cols-2 gap-1 min-w-[200px]">
@@ -2673,7 +2923,7 @@ export default function HistoricalData() {
                     {/* Expandable seasonal analysis row */}
                     {expandedEquityRows.has(stock.symbol) && (
                       <tr>
-                        <td colSpan={8} className="px-6 py-4 bg-gray-50">
+                        <td colSpan={11} className="px-3 py-3 bg-gray-50">
                           <div className="border-t border-gray-200 pt-4">
                             <h4 className="text-sm font-medium text-gray-900 mb-3">
                               Seasonal Analysis - {stock.symbol}
@@ -2705,16 +2955,9 @@ export default function HistoricalData() {
       {/* Commodities Table */}
       {activeTab === 'commodities' && (
         <div className="mb-6">
-          <div className="flex justify-between items-center mb-4">
-            <h3 className="text-lg font-medium text-gray-900">Commodities</h3>
-            <div className="text-sm text-gray-500">
-              Showing {commodityStats?.length || 0} commodities
-                  </div>
-                </div>
-                
           {/* Commodity Table Pagination - Top */}
           {commodityTotalPages > 1 && (
-            <div className="bg-white px-4 py-3 flex items-center justify-between border-t border-gray-200 sm:px-6 mb-4">
+            <div className="bg-white px-4 py-3 flex items-center justify-between border-t border-gray-200 sm:px-6 mb-2">
               <div className="flex-1 flex justify-between sm:hidden">
                 <button
                   onClick={() => setCommodityCurrentPage(Math.max(1, commodityCurrentPage - 1))}
@@ -2801,17 +3044,33 @@ export default function HistoricalData() {
           {/* Commodities Table */}
           <div className="bg-white shadow overflow-hidden sm:rounded-md">
             <div className="overflow-x-auto">
-              <table className="min-w-full divide-y divide-gray-200">
+              <table className="min-w-full divide-y divide-gray-200 border-collapse">
                 <thead className="bg-gray-50">
                   <tr>
-                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                    <th className="px-3 py-2 text-center text-xs font-medium text-gray-700 uppercase tracking-wider border-r border-gray-300" colSpan={1}></th>
+                    <th className="px-3 py-2 text-center text-xs font-medium text-gray-700 uppercase tracking-wider border-r border-gray-300" colSpan={1}></th>
+                    <th className="px-3 py-2 text-center text-xs font-medium text-gray-700 uppercase tracking-wider border-r border-gray-300" colSpan={1}></th>
+                    <th className="px-3 py-2 text-center text-xs font-medium text-gray-700 uppercase tracking-wider border-r border-gray-300" colSpan={1}></th>
+                    <th className="px-3 py-2 text-center text-xs font-medium text-gray-700 uppercase tracking-wider border-r border-gray-300" colSpan={2}>
+                      Previous Month: {getPreviousMonthLabel()}
+                    </th>
+                    <th className="px-3 py-2 text-center text-xs font-medium text-gray-700 uppercase tracking-wider border-r border-gray-300" colSpan={2}>
+                      Current Month: {getCurrentMonthLabel()}
+                    </th>
+                    <th className="px-3 py-2 text-center text-xs font-medium text-gray-700 uppercase tracking-wider border-r border-gray-300" colSpan={2}>
+                      Next Month: {getNextMonthLabel()}
+                    </th>
+                    <th className="px-3 py-2 text-center text-xs font-medium text-gray-700 uppercase tracking-wider" colSpan={1}></th>
+                  </tr>
+                  <tr>
+                    <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider border-r border-gray-300">
                       <span className="sr-only">Expand</span>
                     </th>
                     <th 
-                      className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100"
+                      className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100 border-r border-gray-300"
                       onClick={() => handleCommoditySort('symbol')}
                     >
-                      <div className="flex items-center space-x-1">
+                      <div className="flex items-center space-x-0.5">
                         <span>Symbol</span>
                         {commoditySortField === 'symbol' && (
                           commoditySortDirection === 'asc' ? 
@@ -2821,36 +3080,10 @@ export default function HistoricalData() {
                       </div>
                     </th>
                     <th 
-                      className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100"
-                      onClick={() => handleCommoditySort('closingPrice')}
-                    >
-                      <div className="flex items-center space-x-1">
-                        <span>Previous Month Closing Price</span>
-                        {commoditySortField === 'closingPrice' && (
-                          commoditySortDirection === 'asc' ? 
-                            <ChevronUpIcon className="h-4 w-4" /> : 
-                            <ChevronDownIcon className="h-4 w-4" />
-                        )}
-                      </div>
-                    </th>
-                    <th 
-                      className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100"
-                      onClick={() => handleCommoditySort('previousMonthReturn')}
-                    >
-                      <div className="flex items-center space-x-1">
-                        <span>Previous Month Return</span>
-                        {commoditySortField === 'previousMonthReturn' && (
-                          commoditySortDirection === 'asc' ? 
-                            <ChevronUpIcon className="h-4 w-4" /> : 
-                            <ChevronDownIcon className="h-4 w-4" />
-                        )}
-                      </div>
-                    </th>
-                    <th 
-                      className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100"
+                      className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100 border-r border-gray-300"
                       onClick={() => handleCommoditySort('safetyMargin')}
                     >
-                      <div className="flex items-center space-x-1">
+                      <div className="flex items-center space-x-0.5">
                         <span>Safety Margin</span>
                         {commoditySortField === 'safetyMargin' && (
                           commoditySortDirection === 'asc' ? 
@@ -2859,13 +3092,18 @@ export default function HistoricalData() {
                         )}
                       </div>
                     </th>
+                    <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider border-r border-gray-300">
+                      <div className="flex items-center space-x-0.5">
+                        <span>Current Price</span>
+                      </div>
+                    </th>
                     <th 
-                      className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100"
-                      onClick={() => handleCommoditySort('safePE')}
+                      className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100 border-r border-gray-300"
+                      onClick={() => handleCommoditySort('closingPrice')}
                     >
-                      <div className="flex items-center space-x-1">
-                        <span>Safe PE Price</span>
-                        {commoditySortField === 'safePE' && (
+                      <div className="flex items-center space-x-0.5">
+                        <span>Closing Price</span>
+                        {commoditySortField === 'closingPrice' && (
                           commoditySortDirection === 'asc' ? 
                             <ChevronUpIcon className="h-4 w-4" /> : 
                             <ChevronDownIcon className="h-4 w-4" />
@@ -2873,11 +3111,24 @@ export default function HistoricalData() {
                       </div>
                     </th>
                     <th 
-                      className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100"
+                      className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100 border-r border-gray-300"
+                      onClick={() => handleCommoditySort('previousMonthReturn')}
+                    >
+                      <div className="flex items-center space-x-0.5">
+                        <span>Returns</span>
+                        {commoditySortField === 'previousMonthReturn' && (
+                          commoditySortDirection === 'asc' ? 
+                            <ChevronUpIcon className="h-4 w-4" /> : 
+                            <ChevronDownIcon className="h-4 w-4" />
+                        )}
+                      </div>
+                    </th>
+                    <th 
+                      className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100 border-r border-gray-300"
                       onClick={() => handleCommoditySort('successRate')}
                     >
-                      <div className="flex items-center space-x-1">
-                        <span>Current Month Success Rate</span>
+                      <div className="flex items-center space-x-0.5">
+                        <span>Success Rate</span>
                         {commoditySortField === 'successRate' && (
                           commoditySortDirection === 'asc' ? 
                             <ChevronUpIcon className="h-4 w-4" /> : 
@@ -2886,11 +3137,50 @@ export default function HistoricalData() {
                       </div>
                     </th>
                     <th 
-                      className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100"
+                      className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100 border-r border-gray-300"
+                      onClick={() => handleCommoditySort('safePE')}
+                    >
+                      <div className="flex items-center space-x-0.5">
+                        <span>Safe PE (Strike/Premium)</span>
+                        {commoditySortField === 'safePE' && (
+                          commoditySortDirection === 'asc' ? 
+                            <ChevronUpIcon className="h-4 w-4" /> : 
+                            <ChevronDownIcon className="h-4 w-4" />
+                        )}
+                      </div>
+                    </th>
+                    <th 
+                      className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100 border-r border-gray-300"
+                      onClick={() => handleCommoditySort('successRate')}
+                    >
+                      <div className="flex items-center space-x-0.5">
+                        <span>Success Rate</span>
+                        {commoditySortField === 'successRate' && (
+                          commoditySortDirection === 'asc' ? 
+                            <ChevronUpIcon className="h-4 w-4" /> : 
+                            <ChevronDownIcon className="h-4 w-4" />
+                        )}
+                      </div>
+                    </th>
+                    <th 
+                      className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100 border-r border-gray-300"
+                      onClick={() => handleCommoditySort('safePE')}
+                    >
+                      <div className="flex items-center space-x-0.5">
+                        <span>Safe PE (Strike/Premium)</span>
+                        {commoditySortField === 'safePE' && (
+                          commoditySortDirection === 'asc' ? 
+                            <ChevronUpIcon className="h-4 w-4" /> : 
+                            <ChevronDownIcon className="h-4 w-4" />
+                        )}
+                      </div>
+                    </th>
+                    <th 
+                      className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100"
                       onClick={() => handleCommoditySort('topFalls')}
                     >
-                      <div className="flex items-center space-x-1">
-                        <span>Top 5 Falls</span>
+                      <div className="flex items-center space-x-0.5">
+                        <span>Top 4 Falls</span>
                         {commoditySortField === 'topFalls' && (
                           commoditySortDirection === 'asc' ? 
                             <ChevronUpIcon className="h-4 w-4" /> : 
@@ -2904,7 +3194,7 @@ export default function HistoricalData() {
                   {commodityPaginatedData?.map((commodity) => (
                     <>
                       <tr key={commodity.symbol} className="hover:bg-gray-50">
-                        <td className="px-6 py-4 whitespace-nowrap">
+                        <td className="px-3 py-3 whitespace-nowrap border-r border-gray-300">
                           <button
                             onClick={() => handleCommodityRowExpand(commodity.symbol)}
                             className="text-gray-400 hover:text-gray-600 transition-colors"
@@ -2917,39 +3207,14 @@ export default function HistoricalData() {
                             )}
                           </button>
                         </td>
-                        <td className="px-6 py-4 whitespace-nowrap">
+                        <td className="px-3 py-3 whitespace-nowrap border-r border-gray-300">
                           <div className="flex items-center">
-                            <ChartBarIcon className="h-4 w-4 text-gray-400 mr-2" />
+                            <ChartBarIcon className="h-4 w-4 text-gray-400 mr-1" />
                             <div className="text-sm font-medium text-gray-900">{commodity.symbol}</div>
                           </div>
                         </td>
-                        <td className="px-6 py-4 whitespace-nowrap">
-                          <div className="text-sm text-gray-900">
-                            {commodity.latestMonth ? (
-                              <>
-                                <div className="font-medium">₹{formatPrice(commodity.latestMonth.closingPrice)}</div>
-                                <div className="text-xs text-gray-500">
-                                  {formatMonthYear(commodity.latestMonth.year, commodity.latestMonth.month)}
-                                </div>
-                              </>
-                            ) : (
-                              <span className="text-gray-500">No data</span>
-                            )}
-                          </div>
-                        </td>
-                        <td className="px-6 py-4 whitespace-nowrap">
-                          <div className="text-sm">
-                            {commodity.previousMonthReturn ? (
-                              <span className={`font-medium ${commodity.previousMonthReturn.percentChange >= 0 ? 'text-green-600' : 'text-red-600'}`}>
-                                {commodity.previousMonthReturn.percentChange >= 0 ? '+' : ''}{commodity.previousMonthReturn.percentChange.toFixed(2)}%
-                              </span>
-                            ) : (
-                              <span className="text-gray-500">No data</span>
-                            )}
-                          </div>
-                        </td>
-                        <td className="px-6 py-4 whitespace-nowrap">
-                          <div className="flex items-center space-x-2">
+                        <td className="px-3 py-3 whitespace-nowrap border-r border-gray-300">
+                          <div className="flex items-center space-x-1">
                             <span className={`text-sm font-medium ${
                               getSafetyMarginForSymbol(commodity.symbol, 'commodity') === 'NA' 
                           ? 'text-gray-500' 
@@ -2971,7 +3236,69 @@ export default function HistoricalData() {
                             </button>
                     </div>
                         </td>
-                        <td className="px-6 py-4 whitespace-nowrap">
+                        <td className="px-3 py-3 whitespace-nowrap border-r border-gray-300">
+                          {currentPrices[commodity.symbol] ? (
+                            <div className="text-sm">
+                              <div className="font-medium text-gray-900">
+                                ₹{formatPrice(currentPrices[commodity.symbol]!.lastTrade)}
+                              </div>
+                              {currentPrices[commodity.symbol]!.change !== 0 && (
+                                <div className={`text-xs ${currentPrices[commodity.symbol]!.change >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+                                  {currentPrices[commodity.symbol]!.change >= 0 ? '+' : ''}
+                                  {currentPrices[commodity.symbol]!.changePercent.toFixed(2)}%
+                                </div>
+                              )}
+                            </div>
+                          ) : (
+                            <span className="text-sm text-gray-500">-</span>
+                          )}
+                        </td>
+                        <td className="px-3 py-3 whitespace-nowrap border-r border-gray-300">
+                          <div className="text-sm text-gray-900">
+                            {commodity.latestMonth ? (
+                              <>
+                                <div className="font-medium">₹{formatPrice(commodity.latestMonth.closingPrice)}</div>
+                                <div className="text-xs text-gray-500">
+                                  {formatMonthYear(commodity.latestMonth.year, commodity.latestMonth.month)}
+                                </div>
+                              </>
+                            ) : (
+                              <span className="text-gray-500">No data</span>
+                            )}
+                          </div>
+                        </td>
+                        <td className="px-3 py-3 whitespace-nowrap border-r border-gray-300">
+                          <div className="text-sm">
+                            {commodity.previousMonthReturn ? (
+                              <span className={`font-medium ${commodity.previousMonthReturn.percentChange >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+                                {commodity.previousMonthReturn.percentChange >= 0 ? '+' : ''}{commodity.previousMonthReturn.percentChange.toFixed(2)}%
+                              </span>
+                            ) : (
+                              <span className="text-gray-500">No data</span>
+                            )}
+                          </div>
+                        </td>
+                        <td className="px-3 py-3 whitespace-nowrap border-r border-gray-300">
+                          {commodity.latestMonth ? (
+                            <span className={`text-sm font-medium ${
+                          (() => {
+                            const nextMonth = getNextMonth(commodity.latestMonth.year, commodity.latestMonth.month);
+                                const successRate = getCommoditySuccessRateForMonth(commodity.symbol, nextMonth.month);
+                            return successRate >= 60 ? 'text-green-700' : 
+                                   successRate >= 40 ? 'text-yellow-600' : 
+                                   'text-red-600';
+                          })()
+                        }`}>
+                          {(() => {
+                            const nextMonth = getNextMonth(commodity.latestMonth.year, commodity.latestMonth.month);
+                                return getCommoditySuccessRateForMonth(commodity.symbol, nextMonth.month);
+                          })()}%
+                      </span>
+                          ) : (
+                            <span className="text-sm text-gray-500">No data</span>
+                          )}
+                        </td>
+                        <td className="px-3 py-3 whitespace-nowrap border-r border-gray-300">
                           {commodity.latestMonth ? (
                             <span className={`text-sm font-medium ${
                           (() => {
@@ -2996,12 +3323,13 @@ export default function HistoricalData() {
                             <span className="text-sm text-gray-500">No data</span>
                           )}
                         </td>
-                        <td className="px-6 py-4 whitespace-nowrap">
+                        <td className="px-3 py-3 whitespace-nowrap border-r border-gray-300">
                           {commodity.latestMonth ? (
                             <span className={`text-sm font-medium ${
                           (() => {
                             const nextMonth = getNextMonth(commodity.latestMonth.year, commodity.latestMonth.month);
-                                const successRate = getCommoditySuccessRateForMonth(commodity.symbol, nextMonth.month);
+                            const nextNextMonth = getNextMonth(nextMonth.year, nextMonth.month);
+                            const successRate = getCommoditySuccessRateForMonth(commodity.symbol, nextNextMonth.month);
                             return successRate >= 60 ? 'text-green-700' : 
                                    successRate >= 40 ? 'text-yellow-600' : 
                                    'text-red-600';
@@ -3009,14 +3337,40 @@ export default function HistoricalData() {
                         }`}>
                           {(() => {
                             const nextMonth = getNextMonth(commodity.latestMonth.year, commodity.latestMonth.month);
-                                return getCommoditySuccessRateForMonth(commodity.symbol, nextMonth.month);
+                            const nextNextMonth = getNextMonth(nextMonth.year, nextMonth.month);
+                            return getCommoditySuccessRateForMonth(commodity.symbol, nextNextMonth.month);
                           })()}%
                         </span>
                           ) : (
                             <span className="text-sm text-gray-500">No data</span>
                           )}
                         </td>
-                        <td className="px-6 py-4">
+                        <td className="px-3 py-3 whitespace-nowrap border-r border-gray-300">
+                          {(() => {
+                            // For Next Month Safe PE Price, use current price if available, otherwise fall back to latest month closing price
+                            const baselinePrice = currentPrices[commodity.symbol]?.lastTrade || commodity.latestMonth?.closingPrice;
+                            
+                            if (!baselinePrice) {
+                              return <span className="text-sm text-gray-500">No data</span>;
+                            }
+                            
+                            const safetyMargin = symbolMargins?.find(
+                              (sm: SymbolMargin) => sm.symbol.toLowerCase() === commodity.symbol.toLowerCase() && sm.symbolType === 'commodity'
+                            );
+                            
+                            if (safetyMargin && safetyMargin.safetyMargin) {
+                              const safePE = calculateSafePE(baselinePrice, safetyMargin.safetyMargin);
+                              return (
+                                <span className={`text-sm font-medium ${safetyMargin ? 'text-green-700' : 'text-gray-500'}`}>
+                                  ₹{formatPrice(safePE)}
+                                </span>
+                              );
+                            }
+                            
+                            return <span className="text-sm text-gray-500">NA</span>;
+                          })()}
+                        </td>
+                        <td className="px-3 py-3">
                           <div className="text-sm">
                             {commodity.topFalls && commodity.topFalls.length > 0 ? (
                               <div className="grid grid-cols-2 gap-1 min-w-[200px]">
@@ -3062,7 +3416,7 @@ export default function HistoricalData() {
                       {/* Expandable seasonal analysis row */}
                       {expandedCommodityRows.has(commodity.symbol) && (
                         <tr>
-                          <td colSpan={8} className="px-6 py-4 bg-gray-50">
+                          <td colSpan={11} className="px-3 py-3 bg-gray-50">
                             <div className="border-t border-gray-200 pt-4">
                               <h4 className="text-sm font-medium text-gray-900 mb-3">
                                 Seasonal Analysis - {commodity.symbol}
@@ -3091,6 +3445,123 @@ export default function HistoricalData() {
         </div>
       )}
 
+      {/* Option Premiums View Dialog */}
+      <Transition.Root show={showOptionPremiumsDialog} as={Fragment}>
+        <Dialog as="div" className="relative z-50" onClose={() => setShowOptionPremiumsDialog(false)}>
+          <Transition.Child
+            as={Fragment}
+            enter="ease-out duration-300"
+            enterFrom="opacity-0"
+            enterTo="opacity-100"
+            leave="ease-in duration-200"
+            leaveFrom="opacity-100"
+            leaveTo="opacity-0"
+          >
+            <div className="fixed inset-0 bg-gray-500 bg-opacity-75 transition-opacity" />
+          </Transition.Child>
+
+          <div className="fixed inset-0 z-10 overflow-y-auto">
+            <div className="flex min-h-full items-end justify-center p-4 text-center sm:items-center sm:p-0">
+              <Transition.Child
+                as={Fragment}
+                enter="ease-out duration-300"
+                enterFrom="opacity-0 translate-y-4 sm:translate-y-0 sm:scale-95"
+                enterTo="opacity-100 translate-y-0 sm:scale-100"
+                leave="ease-in duration-200"
+                leaveFrom="opacity-100 translate-y-0 sm:scale-100"
+                leaveTo="opacity-0 translate-y-4 sm:translate-y-0 sm:scale-95"
+              >
+                <Dialog.Panel className="relative transform overflow-hidden rounded-lg bg-white px-4 pb-4 pt-5 text-left shadow-xl transition-all sm:my-8 sm:w-full sm:max-w-4xl sm:p-6">
+                  <div className="absolute right-0 top-0 pr-4 pt-4">
+                    <button
+                      type="button"
+                      className="rounded-md bg-white text-gray-400 hover:text-gray-500 focus:outline-none focus:ring-2 focus:ring-primary-500 focus:ring-offset-2"
+                      onClick={() => setShowOptionPremiumsDialog(false)}
+                    >
+                      <span className="sr-only">Close</span>
+                      <XMarkIcon className="h-6 w-6" aria-hidden="true" />
+                    </button>
+                  </div>
+                  <div>
+                    <Dialog.Title as="h3" className="text-lg font-medium leading-6 text-gray-900 mb-4">
+                      Option Premiums Data
+                    </Dialog.Title>
+                    <div className="mb-4 text-sm text-gray-500">
+                      {lastOptionPremiumRefresh ? (
+                        <span>Last refreshed: {lastOptionPremiumRefresh.toLocaleString()}</span>
+                      ) : (
+                        <span>No refresh data available</span>
+                      )}
+                    </div>
+                    <div className="overflow-x-auto max-h-[70vh]">
+                      <table className="min-w-full divide-y divide-gray-200 border-collapse">
+                        <thead className="bg-gray-50 sticky top-0">
+                          <tr>
+                            <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider border-r border-gray-300">
+                              Symbol
+                            </th>
+                            <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider border-r border-gray-300">
+                              Safe PE Price
+                            </th>
+                            <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider border-r border-gray-300">
+                              Strike Price
+                            </th>
+                            <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider border-r border-gray-300">
+                              Premium
+                            </th>
+                            <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                              Status
+                            </th>
+                          </tr>
+                        </thead>
+                        <tbody className="bg-white divide-y divide-gray-200">
+                          {Object.keys(optionPremiums).length === 0 ? (
+                            <tr>
+                              <td colSpan={5} className="px-4 py-8 text-center text-sm text-gray-500">
+                                No option premium data available. Click "Refresh Option Premiums" to download data.
+                              </td>
+                            </tr>
+                          ) : (
+                            Object.entries(optionPremiums)
+                              .sort(([a], [b]) => a.localeCompare(b))
+                              .map(([symbol, data]) => (
+                                <tr key={symbol} className="hover:bg-gray-50">
+                                  <td className="px-4 py-3 whitespace-nowrap text-sm font-medium text-gray-900 border-r border-gray-300">
+                                    {symbol}
+                                  </td>
+                                  <td className="px-4 py-3 whitespace-nowrap text-sm text-gray-500 border-r border-gray-300">
+                                    {data.safePEPrice !== null ? `₹${formatPrice(data.safePEPrice)}` : 'N/A'}
+                                  </td>
+                                  <td className="px-4 py-3 whitespace-nowrap text-sm text-gray-500 border-r border-gray-300">
+                                    {data.strikePrice !== null ? `₹${formatPrice(data.strikePrice)}` : 'N/A'}
+                                  </td>
+                                  <td className="px-4 py-3 whitespace-nowrap text-sm text-gray-500 border-r border-gray-300">
+                                    {data.premium !== null ? `₹${formatPrice(data.premium)}` : 'N/A'}
+                                  </td>
+                                  <td className="px-4 py-3 whitespace-nowrap text-sm">
+                                    {data.found ? (
+                                      <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-green-100 text-green-800">
+                                        Found
+                                      </span>
+                                    ) : (
+                                      <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-red-100 text-red-800">
+                                        Not Found
+                                      </span>
+                                    )}
+                                  </td>
+                                </tr>
+                              ))
+                          )}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                </Dialog.Panel>
+              </Transition.Child>
+            </div>
+          </div>
+        </Dialog>
+      </Transition.Root>
 
       {/* Add/Edit Historical Data Dialog */}
       <Transition.Root show={openDialog} as={Fragment}>

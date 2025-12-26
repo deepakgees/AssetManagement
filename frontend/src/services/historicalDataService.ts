@@ -417,3 +417,80 @@ export const getOptionChainPremium = async (symbol: string, safePEPrice?: number
   const response = await axios.get(`${API_BASE_URL}/historicalData/option-chain/${encodeURIComponent(symbol)}?${params.toString()}`);
   return response.data;
 };
+
+export interface CurrentMCXPrice {
+  symbol: string;
+  lastTrade: number;
+  change: number;
+  changePercent: number;
+  high: number;
+  low: number;
+  open: number;
+  timestamp: string;
+  lastTradeTime?: string;
+}
+
+export interface CurrentEquityPrice {
+  symbol: string;
+  lastTrade: number;
+  change: number;
+  changePercent: number;
+  high: number;
+  low: number;
+  open: number;
+  previousClose: number;
+  volume: number;
+  timestamp?: string;
+}
+
+// Get current MCX price for a single commodity
+export const getCurrentMCXPrice = async (url: string, symbol: string): Promise<CurrentMCXPrice | null> => {
+  try {
+    const response = await axios.get(`${API_BASE_URL}/historicalData/commodities/current-price`, {
+      params: { url, symbol }
+    });
+    return response.data.success ? response.data.data : null;
+  } catch (error) {
+    console.error(`Error fetching current price for ${symbol}:`, error);
+    return null;
+  }
+};
+
+// Get current MCX prices for multiple commodities
+export const getMultipleCurrentMCXPrices = async (commodityUrls: Record<string, string>): Promise<Record<string, CurrentMCXPrice | null>> => {
+  try {
+    const response = await axios.post(`${API_BASE_URL}/historicalData/commodities/current-prices`, {
+      commodityUrls
+    });
+    return response.data.success ? response.data.data : {};
+  } catch (error) {
+    console.error('Error fetching current prices:', error);
+    return {};
+  }
+};
+
+// Get current equity price for a single symbol
+export const getCurrentEquityPrice = async (symbol: string): Promise<CurrentEquityPrice | null> => {
+  try {
+    const response = await axios.get(`${API_BASE_URL}/historicalData/equities/current-price`, {
+      params: { symbol }
+    });
+    return response.data.success ? response.data.data : null;
+  } catch (error) {
+    console.error(`Error fetching current equity price for ${symbol}:`, error);
+    return null;
+  }
+};
+
+// Get current equity prices for multiple symbols
+export const getMultipleCurrentEquityPrices = async (symbols: string[]): Promise<CurrentEquityPrice[]> => {
+  try {
+    const response = await axios.post(`${API_BASE_URL}/historicalData/equities/current-prices`, {
+      symbols
+    });
+    return response.data.success ? response.data.data : [];
+  } catch (error) {
+    console.error('Error fetching current equity prices:', error);
+    return [];
+  }
+};

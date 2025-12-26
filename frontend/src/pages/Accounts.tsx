@@ -425,7 +425,10 @@ export default function Accounts() {
                   Account Name
                 </th>
                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                  Max Profit (% of Total Margin)
+                  Unrealized Profit (% of Total Margin)
+                </th>
+                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                  Available Margin
                 </th>
                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
                   Last Sync
@@ -490,6 +493,16 @@ export default function Accounts() {
                           );
                         })()}
                       </td>
+                      <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
+                        {(() => {
+                          // Calculate family-level available margin
+                          let totalAvailableMargin = 0;
+                          familyAccounts.forEach((account) => {
+                            totalAvailableMargin += calculateCustomMargin(account.id);
+                          });
+                          return formatCurrency(totalAvailableMargin);
+                        })()}
+                      </td>
                       <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
                         {/* Last Sync column - empty for family header */}
                       </td>
@@ -542,6 +555,9 @@ export default function Accounts() {
                           <div className="text-xs text-gray-500">
                             ({percentage.toFixed(2)}%)
                           </div>
+                        </td>
+                        <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
+                          {formatCurrency(availableMargin)}
                         </td>
                         <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
                           {account.lastSync ? (
