@@ -71,6 +71,8 @@ class PnLService {
     duplicateCount: number;
     duplicates: any[];
     uniqueRecords: number;
+    recordsByInstrumentType?: Record<string, { total: number; duplicates: number; unique: number }>;
+    parsedRecords?: any[]; // All parsed records for preview
   }> {
     const formData = new FormData();
     formData.append('file', file);
@@ -148,6 +150,38 @@ class PnLService {
   // Delete P&L records by date
   async deleteUpload(date: string, accountId: number): Promise<{ message: string; deletedCount: number }> {
     const response = await axios.delete(`${API_BASE_URL}/pnl/upload/${date}?accountId=${accountId}`);
+    return response.data;
+  }
+
+  // Extract Excel worksheets to CSV files
+  async extractExcel(file: File): Promise<{
+    message: string;
+    extractedFiles: Array<{ name: string; sheetName: string }>;
+  }> {
+    const formData = new FormData();
+    formData.append('file', file);
+
+    const response = await axios.post(`${API_BASE_URL}/pnl/extract-excel`, formData, {
+      headers: {
+        'Content-Type': 'multipart/form-data',
+      },
+    });
+
+    return response.data;
+  }
+
+  // Upload CSV file from temp directory
+  async uploadCsvFromTemp(fileName: string, accountId: number, skipDuplicates: boolean = false): Promise<{
+    message: string;
+    accountId: number;
+    status: string;
+  }> {
+    const response = await axios.post(`${API_BASE_URL}/pnl/upload-csv-from-temp`, {
+      fileName,
+      accountId,
+      skipDuplicates
+    });
+
     return response.data;
   }
 }

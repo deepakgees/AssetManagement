@@ -7,6 +7,7 @@ import { FundTransactionService } from '../services/fundTransactionService';
 import { FundTransaction, CreateFundTransactionData } from '../types/fundTransaction';
 import Layout from '../components/Layout';
 import PnLChart from '../components/PnLChart';
+import MonthlyPnLTable from '../components/MonthlyPnLTable';
 import {
   CloudArrowUpIcon,
   DocumentArrowDownIcon,
@@ -35,6 +36,7 @@ const PnL: React.FC = () => {
   const [showFundModal, setShowFundModal] = useState(false);
   const [showCSVUploadModal, setShowCSVUploadModal] = useState(false);
   const [uploadFile, setUploadFile] = useState<File | null>(null);
+  const [csvOnlyMode, setCsvOnlyMode] = useState(false);
   const [csvUploadFile, setCsvUploadFile] = useState<File | null>(null);
   const [csvUploadAccountId, setCsvUploadAccountId] = useState<number | null>(null);
   const [uploading, setUploading] = useState(false);
@@ -55,12 +57,22 @@ const PnL: React.FC = () => {
     duplicates: any[];
     uniqueRecords: number;
     fileType: 'pnl' | 'dividend';
+    recordsByInstrumentType?: Record<string, { total: number; duplicates: number; unique: number }>;
+    parsedRecords?: any[];
   } | null>(null);
+  const [showRecordsPreview, setShowRecordsPreview] = useState(false);
+  
+  // Excel extraction states
+  const [extractingExcel, setExtractingExcel] = useState(false);
+  const [extractedCsvFiles, setExtractedCsvFiles] = useState<Array<{ name: string; sheetName: string; path: string }>>([]);
+  const [selectedCsvFiles, setSelectedCsvFiles] = useState<Set<string>>(new Set());
+  const [showCsvSelectionModal, setShowCsvSelectionModal] = useState(false);
   
   // Filter states
   const [instrumentTypeFilter, setInstrumentTypeFilter] = useState<string>('');
   const [financialYearFilter, setFinancialYearFilter] = useState<string>('');
   const [quarterFilter, setQuarterFilter] = useState<string>('');
+  const [accountFilter, setAccountFilter] = useState<string>('');
   
   // Fund transaction time range filter
   const [fundTransactionStartDate, setFundTransactionStartDate] = useState<string>('');
@@ -339,6 +351,99 @@ const PnL: React.FC = () => {
     },
   });
 
+  const handleFileUploadClick = async () => {
+    if (!uploadFile || (familyView && !selectedAccount)) return;
+    
+    // Check if it's an Excel file or CSV file
+    const isExcel = uploadFile.name.match(/\.(xlsx|xls|xlsm)$/i);
+    
+    if (isExcel) {
+      // Handle Excel file - extract to CSV first
+      handleExcelUpload();
+    } else {
+      // Handle CSV file - show confirmation dialog
+      handleFileUpload();
+    }
+  };
+
+  const handleExcelUpload = async () => {
+    if (!uploadFile || (familyView && !selectedAccount)) return;
+    
+    setExtractingExcel(true);
+    try {
+      // Extract Excel worksheets to CSV files
+      const result = await pnlService.extractExcel(uploadFile);
+      
+      // Store extracted files
+      const filesWithPath = result.extractedFiles.map(f => ({
+        name: f.name,
+        sheetName: f.sheetName,
+        path: f.name // Just store the filename, server will find it in temp dir
+      }));
+      
+      setExtractedCsvFiles(filesWithPath);
+      setShowUploadModal(false);
+      setShowCsvSelectionModal(true);
+      
+      // Select all files by default
+      setSelectedCsvFiles(new Set(filesWithPath.map(f => f.name)));
+    } catch (error) {
+      console.error('Error extracting Excel:', error);
+      alert(`Error extracting Excel file: ${error instanceof Error ? error.message : 'Unknown error'}`);
+    } finally {
+      setExtractingExcel(false);
+    }
+  };
+
+  const handleSelectedCsvUpload = async () => {
+    if (selectedCsvFiles.size === 0) {
+      alert('Please select at least one CSV file to upload');
+      return;
+    }
+
+    const accountId = selectedAccount;
+    if (!accountId) {
+      alert('Please select an account');
+      return;
+    }
+
+    setUploading(true);
+    try {
+      // Upload each selected CSV file
+      const selectedFiles = extractedCsvFiles.filter(f => selectedCsvFiles.has(f.name));
+      let successCount = 0;
+      let errorCount = 0;
+
+      for (const file of selectedFiles) {
+        try {
+          // Upload CSV file from temp directory
+          await pnlService.uploadCsvFromTemp(file.name, accountId, true); // Skip duplicates by default
+          successCount++;
+        } catch (error) {
+          console.error(`Error uploading ${file.name}:`, error);
+          errorCount++;
+        }
+      }
+
+      // Invalidate queries to refresh data
+      queryClient.invalidateQueries({ queryKey: ['pnl-all-records', accountId] });
+      queryClient.invalidateQueries({ queryKey: ['pnl-family-records'] });
+      
+      // Clean up
+      setShowCsvSelectionModal(false);
+      setExtractedCsvFiles([]);
+      setSelectedCsvFiles(new Set());
+      setUploadFile(null);
+      
+      alert(`Upload completed! ${successCount} file(s) uploaded successfully${errorCount > 0 ? `, ${errorCount} file(s) failed` : ''}`);
+    } catch (error) {
+      console.error('Error uploading CSV files:', error);
+      alert(`Error uploading files: ${error instanceof Error ? error.message : 'Unknown error'}`);
+    } finally {
+      setUploading(false);
+    }
+  };
+
   const handleFileUpload = async () => {
     if (!uploadFile || !selectedAccount) return;
     
@@ -411,11 +516,12 @@ const PnL: React.FC = () => {
     }
   };
 
-  const handleSkipDuplicates = async () => {
+  const handleConfirmUpload = async () => {
     if (!duplicateInfo || !uploadFile || !selectedAccount) return;
     
     setUploading(true);
     try {
+      // Upload with skipDuplicates=true to skip duplicate records
       if (duplicateInfo.fileType === 'dividend') {
         await dividendService.uploadFile(uploadFile, selectedAccount, true);
       } else {
@@ -424,8 +530,14 @@ const PnL: React.FC = () => {
       // Invalidate queries to refresh data
       queryClient.invalidateQueries({ queryKey: ['dividend-all-records', selectedAccount] });
       queryClient.invalidateQueries({ queryKey: ['pnl-all-records', selectedAccount] });
+      queryClient.invalidateQueries({ queryKey: ['pnl-uploads', selectedAccount] });
       setShowDuplicateModal(false);
       setDuplicateInfo(null);
+      setUploadFile(null);
+      alert(`Successfully uploaded ${duplicateInfo.uniqueRecords} unique records.`);
+    } catch (error) {
+      console.error('Error uploading file:', error);
+      alert(`Error uploading file: ${error instanceof Error ? error.message : 'Unknown error'}`);
     } finally {
       setUploading(false);
     }
@@ -541,6 +653,14 @@ const PnL: React.FC = () => {
     
     // Apply filters
     const filtered = records.filter(record => {
+      // Filter by account
+      if (accountFilter) {
+        const recordAccountId = record.account?.id || record.accountId;
+        if (recordAccountId?.toString() !== accountFilter) {
+          return false;
+        }
+      }
+      
       // Filter by instrument type
       if (instrumentTypeFilter && record.instrumentType !== instrumentTypeFilter) {
         return false;
@@ -1158,13 +1278,30 @@ const PnL: React.FC = () => {
             {/* Overview Tab */}
             {activeTab === 'overview' && (
               <div className="space-y-6">
-
-
-                {/* P&L Chart */}
+                {/* Monthly P&L Trend */}
                 {filteredRecords.length > 0 ? (
                   <div className="bg-white shadow overflow-hidden sm:rounded-lg">
                     <div className="px-4 py-5 sm:p-6">
-                      <h3 className="text-lg font-medium text-gray-900 mb-4">P&L Chart</h3>
+                      <h3 className="text-lg font-medium text-gray-900 mb-4">Monthly P&L Trend</h3>
+                      <MonthlyPnLTable records={filteredRecords} />
+                    </div>
+                  </div>
+                ) : (
+                  <div className="bg-white shadow overflow-hidden sm:rounded-lg">
+                    <div className="px-4 py-5 sm:p-6">
+                      <h3 className="text-lg font-medium text-gray-900 mb-4">Monthly P&L Trend</h3>
+                      <div className="text-center text-gray-500 py-8">
+                        No P&L records available to display
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                {/* Yearly P&L Trend */}
+                {filteredRecords.length > 0 ? (
+                  <div className="bg-white shadow overflow-hidden sm:rounded-lg">
+                    <div className="px-4 py-5 sm:p-6">
+                      <h3 className="text-lg font-medium text-gray-900 mb-4">Yearly P&L Trend</h3>
                       <div className="h-80 w-full">
                         <PnLChart records={filteredRecords} />
                       </div>
@@ -1173,7 +1310,7 @@ const PnL: React.FC = () => {
                 ) : (
                   <div className="bg-white shadow overflow-hidden sm:rounded-lg">
                     <div className="px-4 py-5 sm:p-6">
-                      <h3 className="text-lg font-medium text-gray-900 mb-4">P&L Chart</h3>
+                      <h3 className="text-lg font-medium text-gray-900 mb-4">Yearly P&L Trend</h3>
                       <div className="text-center text-gray-500 py-8">
                         No P&L records available to display chart
                       </div>
@@ -1560,8 +1697,22 @@ const PnL: React.FC = () => {
                       </div>
                       <div className="flex items-center gap-3">
                         <button
-                          onClick={() => setShowUploadModal(true)}
+                          onClick={() => {
+                            setCsvOnlyMode(false);
+                            setShowUploadModal(true);
+                          }}
                           className="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md shadow-sm text-white bg-indigo-600 hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500"
+                        >
+                          <CloudArrowUpIcon className="h-4 w-4 mr-2" />
+                          Upload Zerodha Tax P&L Statement
+                        </button>
+                        <button
+                          onClick={() => {
+                            setCsvOnlyMode(true);
+                            setShowUploadModal(true);
+                            setUploadFile(null);
+                          }}
+                          className="inline-flex items-center px-4 py-2 border border-gray-300 text-sm font-medium rounded-md shadow-sm text-gray-700 bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500"
                         >
                           <CloudArrowUpIcon className="h-4 w-4 mr-2" />
                           Upload CSV
@@ -1578,6 +1729,30 @@ const PnL: React.FC = () => {
                       </div>
                     </div>
                     <div className="flex items-end gap-4">
+                      <div className="flex-1 max-w-48">
+                        <label className="block text-sm font-medium text-gray-700 mb-1">
+                          Account
+                        </label>
+                        <select
+                          value={accountFilter}
+                          onChange={(e) => setAccountFilter(e.target.value)}
+                          className="block w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 sm:text-sm"
+                        >
+                          <option value="">All Accounts</option>
+                          {accounts?.filter(account => {
+                            // Only show accounts that have records in the current view
+                            const recordsToCheck = (familyView ? allRecords : allRecords) || [];
+                            return recordsToCheck.some((record: any) => {
+                              const recordAccountId = record.account?.id || record.accountId;
+                              return recordAccountId === account.id;
+                            });
+                          }).map((account) => (
+                            <option key={account.id} value={account.id.toString()}>
+                              {account.name} {account.family && `(${account.family})`}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
                       <div className="flex-1 max-w-48">
                         <label className="block text-sm font-medium text-gray-700 mb-1">
                           Instrument Type
@@ -1632,133 +1807,6 @@ const PnL: React.FC = () => {
                     </div>
                   </div>
                 </div>
-
-                {/* P&L Summary */}
-                {Object.keys(pnlSummary).length > 0 && (
-                  <div className="mb-6">
-                    <h4 className="text-md font-medium text-gray-900 mb-4">Account Summary</h4>
-                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-3">
-                      {Object.entries(pnlSummary).map(([accountId, summary]) => (
-                        <div key={accountId} className="bg-gray-50 rounded-lg p-3 border border-gray-200">
-                          <div className="flex items-center justify-between mb-2">
-                            <h5 className="text-sm font-medium text-gray-900 truncate">
-                              {summary.accountName}
-                            </h5>
-                            <span className="text-xs text-gray-500">
-                              {summary.totalRecords} record{summary.totalRecords !== 1 ? 's' : ''}
-                            </span>
-                          </div>
-                          
-                          <div className="space-y-1">
-                            {/* Date Range */}
-                            <div className="flex justify-between text-xs">
-                              <span className="text-gray-500">Period:</span>
-                              <span className="text-gray-700">
-                                {summary.startDate && summary.endDate 
-                                  ? `${formatDate(summary.startDate)} - ${formatDate(summary.endDate)}`
-                                  : summary.startDate 
-                                  ? `From ${formatDate(summary.startDate)}`
-                                  : 'No records'
-                                }
-                              </span>
-                            </div>
-                            
-                            {/* Total P&L */}
-                            <div className="flex justify-between text-xs">
-                              <span className="text-gray-500">Total P&L:</span>
-                              <span className={`font-medium ${
-                                summary.totalPnL >= 0 ? 'text-green-600' : 'text-red-600'
-                              }`}>
-                                {summary.totalPnL >= 0 ? '+' : ''}{formatCurrency(summary.totalPnL)}
-                              </span>
-                            </div>
-                            
-                            {/* Breakdown */}
-                            <div className="pt-2 border-t border-gray-200">
-                              <div className="flex justify-between text-xs mb-1">
-                                <span className="text-gray-500">Profitable:</span>
-                                <span className="text-green-600">{summary.positiveRecords}</span>
-                              </div>
-                              <div className="flex justify-between text-xs">
-                                <span className="text-gray-500">Loss-making:</span>
-                                <span className="text-red-600">{summary.negativeRecords}</span>
-                              </div>
-                            </div>
-                          </div>
-                        </div>
-                      ))}
-                      
-                      {/* TOTAL Card */}
-                      {(() => {
-                        const totalSummary = Object.values(pnlSummary).reduce((acc, summary) => ({
-                          totalPnL: acc.totalPnL + summary.totalPnL,
-                          totalRecords: acc.totalRecords + summary.totalRecords,
-                          positiveRecords: acc.positiveRecords + summary.positiveRecords,
-                          negativeRecords: acc.negativeRecords + summary.negativeRecords,
-                          startDate: acc.startDate ? (summary.startDate && summary.startDate < acc.startDate ? summary.startDate : acc.startDate) : summary.startDate,
-                          endDate: acc.endDate ? (summary.endDate && summary.endDate > acc.endDate ? summary.endDate : acc.endDate) : summary.endDate,
-                        }), {
-                          totalPnL: 0,
-                          totalRecords: 0,
-                          positiveRecords: 0,
-                          negativeRecords: 0,
-                          startDate: null as string | null,
-                          endDate: null as string | null,
-                        });
-
-                        return (
-                          <div className="bg-blue-50 rounded-lg p-3 border-2 border-blue-200">
-                            <div className="flex items-center justify-between mb-2">
-                              <h5 className="text-sm font-bold text-blue-900 truncate">
-                                TOTAL
-                              </h5>
-                              <span className="text-xs text-blue-600 font-medium">
-                                {totalSummary.totalRecords} record{totalSummary.totalRecords !== 1 ? 's' : ''}
-                              </span>
-                            </div>
-                            
-                            <div className="space-y-1">
-                              {/* Date Range */}
-                              <div className="flex justify-between text-xs">
-                                <span className="text-blue-600 font-medium">Period:</span>
-                                <span className="text-blue-800 font-medium">
-                                  {totalSummary.startDate && totalSummary.endDate 
-                                    ? `${formatDate(totalSummary.startDate)} - ${formatDate(totalSummary.endDate)}`
-                                    : totalSummary.startDate 
-                                    ? `From ${formatDate(totalSummary.startDate)}`
-                                    : 'No records'
-                                  }
-                                </span>
-                              </div>
-                              
-                              {/* Total P&L */}
-                              <div className="flex justify-between text-xs">
-                                <span className="text-blue-600 font-medium">Total P&L:</span>
-                                <span className={`font-bold ${
-                                  totalSummary.totalPnL >= 0 ? 'text-green-600' : 'text-red-600'
-                                }`}>
-                                  {totalSummary.totalPnL >= 0 ? '+' : ''}{formatCurrency(totalSummary.totalPnL)}
-                                </span>
-                              </div>
-                              
-                              {/* Breakdown */}
-                              <div className="pt-2 border-t border-blue-200">
-                                <div className="flex justify-between text-xs mb-1">
-                                  <span className="text-blue-600 font-medium">Profitable:</span>
-                                  <span className="text-green-600 font-medium">{totalSummary.positiveRecords}</span>
-                                </div>
-                                <div className="flex justify-between text-xs">
-                                  <span className="text-blue-600 font-medium">Loss-making:</span>
-                                  <span className="text-red-600 font-medium">{totalSummary.negativeRecords}</span>
-                                </div>
-                              </div>
-                            </div>
-                          </div>
-                        );
-                      })()}
-                    </div>
-                  </div>
-                )}
 
                 {/* P&L Records Table */}
                 {filteredRecords.length > 0 ? (
@@ -2090,9 +2138,14 @@ const PnL: React.FC = () => {
             <div className="fixed inset-0 bg-gray-600 bg-opacity-50 overflow-y-auto h-full w-full z-50">
               <div className="relative top-20 mx-auto p-5 border w-96 shadow-lg rounded-md bg-white">
                 <div className="mt-3">
-                  <h3 className="text-lg font-medium text-gray-900 mb-4">Upload CSV File</h3>
+                  <h3 className="text-lg font-medium text-gray-900 mb-4">
+                    {csvOnlyMode ? 'Upload CSV File' : 'Upload Zerodha Tax P&L Statement'}
+                  </h3>
                   <p className="text-sm text-gray-600 mb-4">
-                    Upload P&L or Dividend CSV files. The system will automatically detect the file type.
+                    {csvOnlyMode 
+                      ? 'Upload a CSV file containing your Zerodha Tax P&L Statement. You\'ll see a breakdown of records by instrument type before confirming the upload.'
+                      : 'Upload an Excel file (.xlsx, .xls) or CSV file containing your Zerodha Tax P&L Statement. For Excel files, the system will extract all worksheets and let you choose which ones to upload. For CSV files, you\'ll see a breakdown before confirming the upload.'
+                    }
                   </p>
                   
                   {/* Account Selection - Only show in family view */}
@@ -2120,28 +2173,31 @@ const PnL: React.FC = () => {
                   <div className="mb-4">
                     <input
                       type="file"
-                      accept=".csv"
+                      accept={csvOnlyMode ? ".csv" : ".xlsx,.xls,.xlsm,.csv"}
                       onChange={(e) => setUploadFile(e.target.files?.[0] || null)}
                       className="block w-full text-sm text-gray-500 file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-sm file:font-semibold file:bg-indigo-50 file:text-indigo-700 hover:file:bg-indigo-100"
                     />
                   </div>
                   <div className="flex justify-end space-x-3">
                     <button
-                      onClick={() => {
-                        setShowUploadModal(false);
-                        setUploadFile(null);
-                        setSelectedAccount(null);
-                      }}
+                        onClick={() => {
+                          setShowUploadModal(false);
+                          setUploadFile(null);
+                          setSelectedAccount(null);
+                          setExtractedCsvFiles([]);
+                          setSelectedCsvFiles(new Set());
+                          setCsvOnlyMode(false);
+                        }}
                       className="px-4 py-2 text-sm font-medium text-gray-700 bg-gray-100 rounded-md hover:bg-gray-200"
                     >
                       Cancel
                     </button>
                     <button
-                      onClick={handleFileUpload}
-                      disabled={!uploadFile || uploading || checkingDuplicates || (familyView && !selectedAccount)}
+                      onClick={handleFileUploadClick}
+                      disabled={!uploadFile || extractingExcel || uploading || checkingDuplicates || (familyView && !selectedAccount)}
                       className="px-4 py-2 text-sm font-medium text-white bg-indigo-600 rounded-md hover:bg-indigo-700 disabled:opacity-50"
                     >
-                      {checkingDuplicates ? 'Checking Duplicates...' : uploading ? 'Uploading...' : 'Upload'}
+                      {extractingExcel ? 'Extracting...' : checkingDuplicates ? 'Analyzing...' : 'Next'}
                     </button>
                   </div>
                 </div>
@@ -2149,24 +2205,126 @@ const PnL: React.FC = () => {
             </div>
           )}
 
-          {/* Duplicate Confirmation Modal */}
+          {/* CSV Selection Modal */}
+          {showCsvSelectionModal && (
+            <div className="fixed inset-0 bg-gray-600 bg-opacity-50 overflow-y-auto h-full w-full z-[60]">
+              <div className="relative top-20 mx-auto p-5 border w-[600px] shadow-lg rounded-md bg-white max-h-[80vh] overflow-y-auto">
+                <div className="mt-3">
+                  <h3 className="text-lg font-medium text-gray-900 mb-4">Select CSV Files to Upload</h3>
+                  <p className="text-sm text-gray-600 mb-4">
+                    Select the worksheets you want to upload as P&L records. Each worksheet has been converted to a CSV file.
+                  </p>
+                  
+                  {extractedCsvFiles.length > 0 ? (
+                    <div className="mb-4 space-y-2 max-h-96 overflow-y-auto border border-gray-200 rounded-md p-4">
+                      {extractedCsvFiles.map((file, index) => (
+                        <label key={index} className="flex items-center p-3 hover:bg-gray-50 rounded-md cursor-pointer">
+                          <input
+                            type="checkbox"
+                            checked={selectedCsvFiles.has(file.name)}
+                            onChange={(e) => {
+                              const newSelected = new Set(selectedCsvFiles);
+                              if (e.target.checked) {
+                                newSelected.add(file.name);
+                              } else {
+                                newSelected.delete(file.name);
+                              }
+                              setSelectedCsvFiles(newSelected);
+                            }}
+                            className="h-4 w-4 text-indigo-600 focus:ring-indigo-500 border-gray-300 rounded"
+                          />
+                          <div className="ml-3 flex-1">
+                            <div className="text-sm font-medium text-gray-900">{file.sheetName}</div>
+                            <div className="text-xs text-gray-500">{file.name}</div>
+                          </div>
+                        </label>
+                      ))}
+                    </div>
+                  ) : (
+                    <div className="mb-4 p-4 bg-yellow-50 border border-yellow-200 rounded-md">
+                      <p className="text-sm text-yellow-700">No CSV files extracted. Please try again.</p>
+                    </div>
+                  )}
+
+                  <div className="flex justify-end space-x-3">
+                    <button
+                      onClick={() => {
+                        setShowCsvSelectionModal(false);
+                        setExtractedCsvFiles([]);
+                        setSelectedCsvFiles(new Set());
+                        setShowUploadModal(false);
+                        setUploadFile(null);
+                      }}
+                      className="px-4 py-2 text-sm font-medium text-gray-700 bg-gray-100 rounded-md hover:bg-gray-200"
+                    >
+                      Cancel
+                    </button>
+                    <button
+                      onClick={handleSelectedCsvUpload}
+                      disabled={selectedCsvFiles.size === 0 || uploading}
+                      className="px-4 py-2 text-sm font-medium text-white bg-indigo-600 rounded-md hover:bg-indigo-700 disabled:opacity-50"
+                    >
+                      {uploading ? 'Uploading...' : `Upload ${selectedCsvFiles.size} Selected File(s)`}
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* CSV Upload Confirmation Modal */}
           {showDuplicateModal && duplicateInfo && (
             <div className="fixed inset-0 bg-gray-600 bg-opacity-50 overflow-y-auto h-full w-full z-50">
-              <div className="relative top-20 mx-auto p-5 border w-[600px] shadow-lg rounded-md bg-white">
+              <div className="relative top-20 mx-auto p-5 border w-[700px] shadow-lg rounded-md bg-white max-h-[80vh] overflow-y-auto">
                 <div className="mt-3">
                   <div className="flex items-center mb-4">
-                    <ExclamationTriangleIcon className="h-6 w-6 text-yellow-500 mr-2" />
-                    <h3 className="text-lg font-medium text-gray-900">Duplicate Records Found</h3>
+                    <ExclamationTriangleIcon className="h-6 w-6 text-blue-500 mr-2" />
+                    <h3 className="text-lg font-medium text-gray-900">CSV File Analysis</h3>
                   </div>
                   
-                  <div className="mb-4 p-4 bg-yellow-50 border border-yellow-200 rounded-md">
+                  {/* Summary */}
+                  <div className="mb-4 p-4 bg-blue-50 border border-blue-200 rounded-md">
                     <p className="text-sm text-gray-700 mb-2">
-                      The file contains <strong>{duplicateInfo.duplicateCount}</strong> duplicate records out of <strong>{duplicateInfo.totalRecords}</strong> total records.
+                      Total records found: <strong>{duplicateInfo.totalRecords}</strong>
                     </p>
-                    <p className="text-sm text-gray-600">
-                      <strong>{duplicateInfo.uniqueRecords}</strong> unique records will be added to your database.
+                    {duplicateInfo.duplicateCount > 0 && (
+                      <p className="text-sm text-gray-700 mb-2">
+                        Duplicate records: <strong className="text-yellow-700">{duplicateInfo.duplicateCount}</strong>
+                      </p>
+                    )}
+                    <p className="text-sm text-gray-700">
+                      Unique records to be uploaded: <strong className="text-green-700">{duplicateInfo.uniqueRecords}</strong>
                     </p>
                   </div>
+
+                  {/* Breakdown by Instrument Type */}
+                  {duplicateInfo.recordsByInstrumentType && Object.keys(duplicateInfo.recordsByInstrumentType).length > 0 && (
+                    <div className="mb-4">
+                      <h4 className="text-sm font-semibold text-gray-900 mb-3">Breakdown by Instrument Type:</h4>
+                      <div className="overflow-x-auto border border-gray-200 rounded-md">
+                        <table className="min-w-full text-sm">
+                          <thead className="bg-gray-50">
+                            <tr>
+                              <th className="px-4 py-2 text-left font-medium text-gray-700 border-b">Instrument Type</th>
+                              <th className="px-4 py-2 text-right font-medium text-gray-700 border-b">Total Records</th>
+                              <th className="px-4 py-2 text-right font-medium text-gray-700 border-b">Duplicates</th>
+                              <th className="px-4 py-2 text-right font-medium text-gray-700 border-b">Unique Records</th>
+                            </tr>
+                          </thead>
+                          <tbody className="bg-white divide-y divide-gray-200">
+                            {Object.entries(duplicateInfo.recordsByInstrumentType).map(([instrumentType, stats]) => (
+                              <tr key={instrumentType} className="hover:bg-gray-50">
+                                <td className="px-4 py-2 font-medium text-gray-900">{instrumentType}</td>
+                                <td className="px-4 py-2 text-right text-gray-700">{stats.total}</td>
+                                <td className="px-4 py-2 text-right text-yellow-700 font-medium">{stats.duplicates}</td>
+                                <td className="px-4 py-2 text-right text-green-700 font-medium">{stats.unique}</td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    </div>
+                  )}
 
                   {duplicateInfo.duplicates.length > 0 && (
                     <div className="mb-4">
@@ -2215,30 +2373,123 @@ const PnL: React.FC = () => {
                     </div>
                   )}
 
-                  <div className="flex justify-end space-x-3">
+                  <div className="flex justify-between items-center">
                     <button
-                      onClick={() => {
-                        setShowDuplicateModal(false);
-                        setDuplicateInfo(null);
-                        setUploadFile(null);
-                      }}
+                      onClick={() => setShowRecordsPreview(true)}
+                      disabled={!duplicateInfo.parsedRecords || duplicateInfo.parsedRecords.length === 0}
+                      className="px-4 py-2 text-sm font-medium text-indigo-600 bg-indigo-50 rounded-md hover:bg-indigo-100 border border-indigo-200 disabled:opacity-50 disabled:cursor-not-allowed"
+                    >
+                      View All Records
+                    </button>
+                    <div className="flex space-x-3">
+                      <button
+                        onClick={() => {
+                          setShowDuplicateModal(false);
+                          setDuplicateInfo(null);
+                          setUploadFile(null);
+                          setShowRecordsPreview(false);
+                        }}
+                        className="px-4 py-2 text-sm font-medium text-gray-700 bg-gray-100 rounded-md hover:bg-gray-200"
+                      >
+                        Cancel
+                      </button>
+                      <button
+                        onClick={handleConfirmUpload}
+                        disabled={uploading}
+                        className="px-4 py-2 text-sm font-medium text-white bg-indigo-600 rounded-md hover:bg-indigo-700 disabled:opacity-50"
+                      >
+                        {uploading ? 'Uploading...' : 'Confirm & Upload'}
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* Records Preview Modal */}
+          {showRecordsPreview && duplicateInfo && duplicateInfo.parsedRecords && (
+            <div className="fixed inset-0 bg-gray-600 bg-opacity-50 overflow-y-auto h-full w-full z-[70]">
+              <div className="relative top-10 mx-auto p-5 border w-[95%] max-w-7xl shadow-lg rounded-md bg-white max-h-[90vh] overflow-y-auto">
+                <div className="mt-3">
+                  <div className="flex items-center justify-between mb-4">
+                    <h3 className="text-lg font-medium text-gray-900">Parsed Records Preview</h3>
+                    <button
+                      onClick={() => setShowRecordsPreview(false)}
+                      className="text-gray-400 hover:text-gray-600"
+                    >
+                      <svg className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                      </svg>
+                    </button>
+                  </div>
+                  
+                  <p className="text-sm text-gray-600 mb-4">
+                    Showing all {duplicateInfo.totalRecords} parsed records grouped by instrument type. Review the data structure to verify parsing is correct.
+                  </p>
+
+                  {/* Group records by instrument type */}
+                  {Object.entries(
+                    duplicateInfo.parsedRecords.reduce((acc: Record<string, any[]>, record) => {
+                      const instrumentType = record.instrumentType || 'Unknown';
+                      if (!acc[instrumentType]) {
+                        acc[instrumentType] = [];
+                      }
+                      acc[instrumentType].push(record);
+                      return acc;
+                    }, {})
+                  ).map(([instrumentType, records]) => (
+                    <div key={instrumentType} className="mb-6">
+                      <h4 className="text-md font-semibold text-gray-900 mb-2 bg-gray-100 px-3 py-2 rounded">
+                        {instrumentType} ({records.length} records)
+                      </h4>
+                      <div className="overflow-x-auto border border-gray-200 rounded-md">
+                        <table className="min-w-full text-xs">
+                          <thead className="bg-gray-50">
+                            <tr>
+                              {records.length > 0 && Object.keys(records[0]).map((key) => (
+                                <th key={key} className="px-3 py-2 text-left font-medium text-gray-700 border-b whitespace-nowrap">
+                                  {key}
+                                </th>
+                              ))}
+                            </tr>
+                          </thead>
+                          <tbody className="bg-white divide-y divide-gray-200">
+                            {records.slice(0, 50).map((record, index) => (
+                              <tr key={index} className="hover:bg-gray-50">
+                                {Object.entries(record).map(([key, value]) => (
+                                  <td key={key} className="px-3 py-2 text-gray-700 border-b whitespace-nowrap">
+                                    {value === null || value === undefined 
+                                      ? <span className="text-gray-400">-</span>
+                                      : typeof value === 'object' && value instanceof Date
+                                      ? value.toLocaleDateString()
+                                      : typeof value === 'number'
+                                      ? value.toLocaleString('en-IN', { maximumFractionDigits: 2 })
+                                      : String(value)
+                                    }
+                                  </td>
+                                ))}
+                              </tr>
+                            ))}
+                            {records.length > 50 && (
+                              <tr>
+                                <td colSpan={records.length > 0 ? Object.keys(records[0]).length : 1} className="px-3 py-2 text-center text-gray-500">
+                                  ... and {records.length - 50} more records (showing first 50)
+                                </td>
+                              </tr>
+                            )}
+                          </tbody>
+                        </table>
+                      </div>
+                    </div>
+                  ))}
+
+                  <div className="flex justify-end mt-4">
+                    <button
+                      onClick={() => setShowRecordsPreview(false)}
                       className="px-4 py-2 text-sm font-medium text-gray-700 bg-gray-100 rounded-md hover:bg-gray-200"
                     >
-                      Cancel
-                    </button>
-                    <button
-                      onClick={handleSkipDuplicates}
-                      disabled={uploading}
-                      className="px-4 py-2 text-sm font-medium text-white bg-green-600 rounded-md hover:bg-green-700 disabled:opacity-50"
-                    >
-                      {uploading ? 'Uploading...' : `Upload ${duplicateInfo.uniqueRecords} Unique Records`}
-                    </button>
-                    <button
-                      onClick={handleUploadWithDuplicates}
-                      disabled={uploading}
-                      className="px-4 py-2 text-sm font-medium text-white bg-yellow-600 rounded-md hover:bg-yellow-700 disabled:opacity-50"
-                    >
-                      {uploading ? 'Uploading...' : 'Upload All Records (Including Duplicates)'}
+                      Close
                     </button>
                   </div>
                 </div>

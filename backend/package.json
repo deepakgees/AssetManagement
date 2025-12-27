@@ -23,7 +23,8 @@
     "logs:http": "node scripts/log-analyzer.js http",
     "logs:recent": "node scripts/log-analyzer.js recent",
     "logs:search": "node scripts/log-analyzer.js search",
-    "logs:cleanup": "ts-node scripts/cleanup-old-logs.ts"
+    "logs:cleanup": "ts-node scripts/cleanup-old-logs.ts",
+    "excel-to-csv": "ts-node scripts/excel-to-csv.ts"
   },
   "dependencies": {
     "@prisma/client": "^6.16.2",
@@ -42,7 +43,8 @@
     "puppeteer": "^13.3.2",
     "speakeasy": "^2.0.0",
     "winston": "^3.17.0",
-    "winston-daily-rotate-file": "^5.0.0"
+    "winston-daily-rotate-file": "^5.0.0",
+    "xlsx": "^0.18.5"
   },
   "devDependencies": {
     "@types/bcryptjs": "^2.4.6",
@@ -50,6 +52,7 @@
     "@types/express": "^4.17.21",
     "@types/multer": "^1.4.13",
     "@types/node": "^20.10.5",
+    "@types/xlsx": "^0.0.36",
     "nodemon": "^3.0.2",
     "prisma": "^6.16.2",
     "ts-node": "^10.9.2",

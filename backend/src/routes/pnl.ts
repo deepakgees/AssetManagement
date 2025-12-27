@@ -1135,8 +1135,7 @@ async function processCSVFile(filePath: string, accountId: number, skipDuplicate
             }
           }
         }
-        
-        serviceLogger.logServiceOperation('PnL', 'processCSVFile', `Inserted ${insertedCount} new records, skipped ${skippedCount} duplicates`);
+        */
       }
 
       // Clean up the uploaded file
