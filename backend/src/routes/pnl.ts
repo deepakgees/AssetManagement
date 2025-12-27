@@ -5,6 +5,7 @@ import { serviceLogger } from '../utils/serviceLogger';
 import csv from 'csv-parser';
 import fs from 'fs';
 import path from 'path';
+import * as XLSX from 'xlsx';
 
 const router = express.Router();
 const prisma = new PrismaClient();
@@ -31,6 +32,38 @@ const upload = multer({
       cb(null, true);
     } else {
       cb(new Error('Only CSV files are allowed'));
+    }
+  }
+});
+
+// Configure multer for Excel file upload
+const excelStorage = multer.diskStorage({
+  destination: (req, file, cb) => {
+    const uploadDir = path.join(__dirname, '../../uploads');
+    if (!fs.existsSync(uploadDir)) {
+      fs.mkdirSync(uploadDir, { recursive: true });
+    }
+    cb(null, uploadDir);
+  },
+  filename: (req, file, cb) => {
+    const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
+    cb(null, 'excel-' + uniqueSuffix + path.extname(file.originalname));
+  }
+});
+
+const excelUpload = multer({ 
+  storage: excelStorage,
+  fileFilter: (req, file, cb) => {
+    const allowedMimes = [
+      'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', // .xlsx
+      'application/vnd.ms-excel', // .xls
+      'application/vnd.ms-excel.sheet.macroEnabled.12' // .xlsm
+    ];
+    if (allowedMimes.includes(file.mimetype) || 
+        file.originalname.match(/\.(xlsx|xls|xlsm)$/i)) {
+      cb(null, true);
+    } else {
+      cb(new Error('Only Excel files (.xlsx, .xls, .xlsm) are allowed'));
     }
   }
 });
@@ -533,14 +566,41 @@ router.post('/parse-and-check-duplicates/:accountId', upload.single('file'), asy
       });
     }
 
-    // Clean up the uploaded file
-    fs.unlinkSync(req.file.path);
+    // Group records by instrument type
+    const recordsByInstrumentType: Record<string, { total: number; duplicates: number; unique: number }> = {};
+    
+    parsedRecords.forEach(record => {
+      const instrumentType = record.instrumentType || 'Unknown';
+      if (!recordsByInstrumentType[instrumentType]) {
+        recordsByInstrumentType[instrumentType] = { total: 0, duplicates: 0, unique: 0 };
+      }
+      recordsByInstrumentType[instrumentType].total++;
+    });
+
+    // Count duplicates by instrument type
+    duplicates.forEach(duplicate => {
+      const instrumentType = duplicate.instrumentType || 'Unknown';
+      if (recordsByInstrumentType[instrumentType]) {
+        recordsByInstrumentType[instrumentType].duplicates++;
+      }
+    });
+
+    // Calculate unique records by instrument type
+    Object.keys(recordsByInstrumentType).forEach(instrumentType => {
+      recordsByInstrumentType[instrumentType].unique = 
+        recordsByInstrumentType[instrumentType].total - recordsByInstrumentType[instrumentType].duplicates;
+    });
+
+    // Don't delete the file here - it will be deleted after actual upload
+    // The file needs to remain for the actual upload step
 
     res.json({
       totalRecords,
       duplicateCount: duplicates.length,
       duplicates,
-      uniqueRecords: totalRecords - duplicates.length
+      uniqueRecords: totalRecords - duplicates.length,
+      recordsByInstrumentType,
+      parsedRecords // Include all parsed records for preview
     });
 
   } catch (error) {
@@ -695,12 +755,76 @@ async function processCSVFile(filePath: string, accountId: number, skipDuplicate
 
     serviceLogger.logServiceOperation('PnL', 'processCSVFile', `Parsed ${results.length} valid records from ${totalRecords} total records (skipped ${skippedRecords} records with empty symbols)`);
 
-    try {
-      // Insert all records into database with duplicate prevention
-      if (results.length > 0) {
         let insertedCount = 0;
         let skippedCount = 0;
         
+    try {
+      // Insert all records into database - simplified approach
+      if (results.length > 0) {
+        // Create clean records with only the fields we need (explicitly exclude id, createdAt, updatedAt)
+        const recordsToInsert = results.map(record => {
+          const cleanRecord: any = {};
+          if (record.accountId !== undefined) cleanRecord.accountId = record.accountId;
+          if (record.instrumentType !== undefined) cleanRecord.instrumentType = record.instrumentType;
+          if (record.symbol !== undefined) cleanRecord.symbol = record.symbol;
+          if (record.isin !== undefined) cleanRecord.isin = record.isin;
+          if (record.entryDate !== undefined) cleanRecord.entryDate = record.entryDate;
+          if (record.exitDate !== undefined) cleanRecord.exitDate = record.exitDate;
+          if (record.quantity !== undefined) cleanRecord.quantity = record.quantity;
+          if (record.buyValue !== undefined) cleanRecord.buyValue = record.buyValue;
+          if (record.sellValue !== undefined) cleanRecord.sellValue = record.sellValue;
+          if (record.profit !== undefined) cleanRecord.profit = record.profit;
+          if (record.periodOfHolding !== undefined) cleanRecord.periodOfHolding = record.periodOfHolding;
+          if (record.fairMarketValue !== undefined) cleanRecord.fairMarketValue = record.fairMarketValue;
+          if (record.taxableProfit !== undefined) cleanRecord.taxableProfit = record.taxableProfit;
+          if (record.turnover !== undefined) cleanRecord.turnover = record.turnover;
+          if (record.brokerage !== undefined) cleanRecord.brokerage = record.brokerage;
+          if (record.exchangeTransactionCharges !== undefined) cleanRecord.exchangeTransactionCharges = record.exchangeTransactionCharges;
+          if (record.ipft !== undefined) cleanRecord.ipft = record.ipft;
+          if (record.sebiCharges !== undefined) cleanRecord.sebiCharges = record.sebiCharges;
+          if (record.cgst !== undefined) cleanRecord.cgst = record.cgst;
+          if (record.sgst !== undefined) cleanRecord.sgst = record.sgst;
+          if (record.igst !== undefined) cleanRecord.igst = record.igst;
+          if (record.stampDuty !== undefined) cleanRecord.stampDuty = record.stampDuty;
+          if (record.stt !== undefined) cleanRecord.stt = record.stt;
+          return cleanRecord;
+        });
+        
+        serviceLogger.logServiceOperation('PnL', 'processCSVFile', `Attempting to insert ${recordsToInsert.length} records directly (no pre-filtering)`);
+        if (recordsToInsert.length > 0) {
+          serviceLogger.logServiceOperation('PnL', 'processCSVFile', `Sample record structure: ${JSON.stringify(recordsToInsert[0])}`);
+        }
+        
+        // Insert records one by one - this is the most reliable approach
+        for (let idx = 0; idx < recordsToInsert.length; idx++) {
+          const cleanRecord = recordsToInsert[idx];
+          try {
+            await prisma.pnLRecord.create({
+              data: cleanRecord
+            });
+            insertedCount++;
+            if ((idx + 1) % 50 === 0) {
+              serviceLogger.logServiceOperation('PnL', 'processCSVFile', `Progress: Inserted ${insertedCount} out of ${idx + 1} records processed`);
+            }
+          } catch (individualError: any) {
+            // Check if this is a unique constraint violation (duplicate)
+            if (individualError.code === 'P2002') {
+              skippedCount++;
+              if (skippedCount <= 10) {
+                serviceLogger.logServiceOperation('PnL', 'processCSVFile', `Duplicate (P2002) - Record ${idx + 1}: ${cleanRecord.symbol || 'N/A'} - ${cleanRecord.instrumentType || 'N/A'}, Error target: ${JSON.stringify(individualError.meta?.target || [])}`);
+              }
+            } else {
+              // Log other errors but continue processing
+              serviceLogger.logServiceError('PnL', 'processCSVFile', individualError);
+              serviceLogger.logServiceOperation('PnL', 'processCSVFile', `Failed to insert record ${idx + 1}: ${individualError.code} - ${individualError.message}`);
+              skippedCount++;
+            }
+          }
+        }
+        
+        serviceLogger.logServiceOperation('PnL', 'processCSVFile', `Inserted ${insertedCount} records, skipped ${skippedCount} duplicates/errors`);
+        
+        /* REMOVED COMPLEX LOGIC - keeping for reference
         if (skipDuplicates) {
           // Get existing records to filter out duplicates before insertion
           const existingRecords = await prisma.pnLRecord.findMany({
@@ -719,41 +843,284 @@ async function processCSVFile(filePath: string, accountId: number, skipDuplicate
 
           if (existingRecords.length > 0) {
             // Filter out duplicates
+            // Normalize dates to compare only the date part (ignore time)
+            const normalizeDate = (date: Date | null | undefined): string | null => {
+              if (!date) return null;
+              const d = new Date(date);
+              return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+            };
+            
+            // Helper to compare floating point numbers with tolerance
+            const floatEquals = (a: number | null | undefined, b: number | null | undefined, tolerance: number = 0.01): boolean => {
+              if (a === null || a === undefined) return b === null || b === undefined;
+              if (b === null || b === undefined) return false;
+              return Math.abs(a - b) < tolerance;
+            };
+            
             const uniqueRecords = results.filter(record => {
-              return !existingRecords.some(existing => 
-                existing.symbol === record.symbol &&
-                existing.instrumentType === record.instrumentType &&
-                existing.entryDate?.getTime() === record.entryDate?.getTime() &&
-                existing.exitDate?.getTime() === record.exitDate?.getTime() &&
-                existing.quantity === record.quantity &&
-                existing.buyValue === record.buyValue &&
-                existing.sellValue === record.sellValue &&
-                existing.profit === record.profit
-              );
+              return !existingRecords.some(existing => {
+                const symbolMatch = existing.symbol === record.symbol;
+                const instrumentTypeMatch = existing.instrumentType === record.instrumentType;
+                const entryDateMatch = normalizeDate(existing.entryDate) === normalizeDate(record.entryDate);
+                const exitDateMatch = normalizeDate(existing.exitDate) === normalizeDate(record.exitDate);
+                const quantityMatch = floatEquals(existing.quantity, record.quantity);
+                const buyValueMatch = floatEquals(existing.buyValue, record.buyValue);
+                const sellValueMatch = floatEquals(existing.sellValue, record.sellValue);
+                const profitMatch = floatEquals(existing.profit, record.profit);
+                
+                if (symbolMatch && instrumentTypeMatch && entryDateMatch && exitDateMatch && 
+                    quantityMatch && buyValueMatch && sellValueMatch && profitMatch) {
+                  // Log first few matches to debug
+                  if (Math.random() < 0.1) { // Log ~10% of matches
+                    serviceLogger.logServiceOperation('PnL', 'processCSVFile', `Found duplicate: ${record.symbol} - ${record.instrumentType}, Entry: ${normalizeDate(record.entryDate)}, Exit: ${normalizeDate(record.exitDate)}`);
+                  }
+                  return true;
+                }
+                return false;
+              });
             });
 
             skippedCount = results.length - uniqueRecords.length;
             
             // Insert only unique records
             if (uniqueRecords.length > 0) {
-              await prisma.pnLRecord.createMany({
-                data: uniqueRecords
+              // Create clean records with only the fields we need (explicitly exclude id, createdAt, updatedAt)
+              const recordsToInsert = uniqueRecords.map(record => {
+                // Explicitly create a new object with only the fields we want
+                const cleanRecord: any = {};
+                if (record.accountId !== undefined) cleanRecord.accountId = record.accountId;
+                if (record.instrumentType !== undefined) cleanRecord.instrumentType = record.instrumentType;
+                if (record.symbol !== undefined) cleanRecord.symbol = record.symbol;
+                if (record.isin !== undefined) cleanRecord.isin = record.isin;
+                if (record.entryDate !== undefined) cleanRecord.entryDate = record.entryDate;
+                if (record.exitDate !== undefined) cleanRecord.exitDate = record.exitDate;
+                if (record.quantity !== undefined) cleanRecord.quantity = record.quantity;
+                if (record.buyValue !== undefined) cleanRecord.buyValue = record.buyValue;
+                if (record.sellValue !== undefined) cleanRecord.sellValue = record.sellValue;
+                if (record.profit !== undefined) cleanRecord.profit = record.profit;
+                if (record.periodOfHolding !== undefined) cleanRecord.periodOfHolding = record.periodOfHolding;
+                if (record.fairMarketValue !== undefined) cleanRecord.fairMarketValue = record.fairMarketValue;
+                if (record.taxableProfit !== undefined) cleanRecord.taxableProfit = record.taxableProfit;
+                if (record.turnover !== undefined) cleanRecord.turnover = record.turnover;
+                if (record.brokerage !== undefined) cleanRecord.brokerage = record.brokerage;
+                if (record.exchangeTransactionCharges !== undefined) cleanRecord.exchangeTransactionCharges = record.exchangeTransactionCharges;
+                if (record.ipft !== undefined) cleanRecord.ipft = record.ipft;
+                if (record.sebiCharges !== undefined) cleanRecord.sebiCharges = record.sebiCharges;
+                if (record.cgst !== undefined) cleanRecord.cgst = record.cgst;
+                if (record.sgst !== undefined) cleanRecord.sgst = record.sgst;
+                if (record.igst !== undefined) cleanRecord.igst = record.igst;
+                if (record.stampDuty !== undefined) cleanRecord.stampDuty = record.stampDuty;
+                if (record.stt !== undefined) cleanRecord.stt = record.stt;
+                return cleanRecord;
               });
-              insertedCount = uniqueRecords.length;
+              
+              // Insert records one by one to get better error reporting and ensure all valid records are inserted
+              serviceLogger.logServiceOperation('PnL', 'processCSVFile', `Attempting to insert ${recordsToInsert.length} unique records`);
+              if (recordsToInsert.length > 0) {
+                serviceLogger.logServiceOperation('PnL', 'processCSVFile', `Sample record structure: ${JSON.stringify(recordsToInsert[0])}`);
+              }
+              
+              let successCount = 0;
+              let duplicateErrorCount = 0;
+              let otherErrorCount = 0;
+              
+              // Create clean records array for batch insert
+              const cleanRecordsForInsert: any[] = [];
+              
+              for (let idx = 0; idx < recordsToInsert.length; idx++) {
+                const record = recordsToInsert[idx];
+                // Explicitly create a new object with only the fields we want - don't use destructuring
+                const cleanRecord: any = {};
+                if (record.accountId !== undefined) cleanRecord.accountId = record.accountId;
+                if (record.instrumentType !== undefined) cleanRecord.instrumentType = record.instrumentType;
+                if (record.symbol !== undefined) cleanRecord.symbol = record.symbol;
+                if (record.isin !== undefined) cleanRecord.isin = record.isin;
+                if (record.entryDate !== undefined) cleanRecord.entryDate = record.entryDate;
+                if (record.exitDate !== undefined) cleanRecord.exitDate = record.exitDate;
+                if (record.quantity !== undefined) cleanRecord.quantity = record.quantity;
+                if (record.buyValue !== undefined) cleanRecord.buyValue = record.buyValue;
+                if (record.sellValue !== undefined) cleanRecord.sellValue = record.sellValue;
+                if (record.profit !== undefined) cleanRecord.profit = record.profit;
+                if (record.periodOfHolding !== undefined) cleanRecord.periodOfHolding = record.periodOfHolding;
+                if (record.fairMarketValue !== undefined) cleanRecord.fairMarketValue = record.fairMarketValue;
+                if (record.taxableProfit !== undefined) cleanRecord.taxableProfit = record.taxableProfit;
+                if (record.turnover !== undefined) cleanRecord.turnover = record.turnover;
+                if (record.brokerage !== undefined) cleanRecord.brokerage = record.brokerage;
+                if (record.exchangeTransactionCharges !== undefined) cleanRecord.exchangeTransactionCharges = record.exchangeTransactionCharges;
+                if (record.ipft !== undefined) cleanRecord.ipft = record.ipft;
+                if (record.sebiCharges !== undefined) cleanRecord.sebiCharges = record.sebiCharges;
+                if (record.cgst !== undefined) cleanRecord.cgst = record.cgst;
+                if (record.sgst !== undefined) cleanRecord.sgst = record.sgst;
+                if (record.igst !== undefined) cleanRecord.igst = record.igst;
+                if (record.stampDuty !== undefined) cleanRecord.stampDuty = record.stampDuty;
+                if (record.stt !== undefined) cleanRecord.stt = record.stt;
+                
+                // Verify no id field is present
+                if ('id' in cleanRecord || 'createdAt' in cleanRecord || 'updatedAt' in cleanRecord) {
+                  serviceLogger.logServiceOperation('PnL', 'processCSVFile', `ERROR: Found forbidden fields in cleanRecord: ${Object.keys(cleanRecord).join(', ')}`);
+                  delete cleanRecord.id;
+                  delete cleanRecord.createdAt;
+                  delete cleanRecord.updatedAt;
+                }
+                
+                // Collect records for batch insert
+                cleanRecordsForInsert.push(cleanRecord);
+              }
+              
+              // Insert all records in a single batch using createMany with skipDuplicates
+              // NOTE: skipDuplicates only works if there's a unique constraint in the database
+              // If there's no unique constraint, createMany will return 0 inserted without error
+              // So we need to check the result and fall back to individual inserts if needed
+              if (cleanRecordsForInsert.length > 0) {
+                try {
+                  const batchResult = await prisma.pnLRecord.createMany({
+                    data: cleanRecordsForInsert,
+                    skipDuplicates: true
+                  });
+                  
+                  // If batch insert returned 0, it means either:
+                  // 1. All records were duplicates (if unique constraint exists)
+                  // 2. No unique constraint exists, so skipDuplicates can't work
+                  // In either case, fall back to individual inserts to get proper error handling
+                  if (batchResult.count === 0) {
+                    serviceLogger.logServiceOperation('PnL', 'processCSVFile', `Batch insert returned 0 (likely no unique constraint or all duplicates), falling back to individual inserts`);
+                    
+                    // Fall through to individual insert logic below
+                  } else {
+                    insertedCount = batchResult.count;
+                    successCount = batchResult.count;
+                    skippedCount += cleanRecordsForInsert.length - batchResult.count;
+                    serviceLogger.logServiceOperation('PnL', 'processCSVFile', `Batch insert: ${batchResult.count} inserted out of ${cleanRecordsForInsert.length} attempted`);
+                  }
+                } catch (batchError: any) {
+                  // If batch fails with an error, log it and fall back to individual inserts
+                  serviceLogger.logServiceError('PnL', 'processCSVFile', batchError);
+                  serviceLogger.logServiceOperation('PnL', 'processCSVFile', `Batch insert failed, trying individual inserts`);
+                }
+                
+                // If batch insert returned 0 or threw an error, insert one by one
+                if (insertedCount === 0 && successCount === 0) {
+                  for (let idx = 0; idx < cleanRecordsForInsert.length; idx++) {
+                    const cleanRecord = cleanRecordsForInsert[idx];
+                    try {
+                      await prisma.pnLRecord.create({
+                        data: cleanRecord
+                      });
+                      insertedCount++;
+                      successCount++;
+                      if ((idx + 1) % 50 === 0) {
+                        serviceLogger.logServiceOperation('PnL', 'processCSVFile', `Progress: Inserted ${insertedCount} out of ${idx + 1} records processed`);
+                      }
+                    } catch (individualError: any) {
+                      // Check if this is a unique constraint violation (duplicate)
+                      if (individualError.code === 'P2002') {
+                        duplicateErrorCount++;
+                        skippedCount++;
+                        if (duplicateErrorCount <= 5) {
+                          serviceLogger.logServiceOperation('PnL', 'processCSVFile', `Duplicate (P2002) - Record ${idx + 1}: ${cleanRecord.symbol || 'N/A'} - ${cleanRecord.instrumentType || 'N/A'}`);
+                        }
+                      } else {
+                        otherErrorCount++;
+                        serviceLogger.logServiceError('PnL', 'processCSVFile', individualError);
+                        skippedCount++;
+                      }
+                    }
+                  }
+                }
+              }
+              
+              serviceLogger.logServiceOperation('PnL', 'processCSVFile', `Insertion summary: ${successCount} succeeded, ${duplicateErrorCount} duplicates (P2002), ${otherErrorCount} other errors`);
+              serviceLogger.logServiceOperation('PnL', 'processCSVFile', `Inserted ${insertedCount} unique records out of ${uniqueRecords.length} attempted`);
+            } else {
+              serviceLogger.logServiceOperation('PnL', 'processCSVFile', `No unique records to insert (all ${results.length} records were duplicates)`);
             }
           } else {
             // No existing records, insert all
-            await prisma.pnLRecord.createMany({
-              data: results
+            // Create clean records with only the fields we need (explicitly exclude id, createdAt, updatedAt)
+            const recordsToInsert = results.map(record => {
+              // Explicitly create a new object with only the fields we want
+              const cleanRecord: any = {};
+              if (record.accountId !== undefined) cleanRecord.accountId = record.accountId;
+              if (record.instrumentType !== undefined) cleanRecord.instrumentType = record.instrumentType;
+              if (record.symbol !== undefined) cleanRecord.symbol = record.symbol;
+              if (record.isin !== undefined) cleanRecord.isin = record.isin;
+              if (record.entryDate !== undefined) cleanRecord.entryDate = record.entryDate;
+              if (record.exitDate !== undefined) cleanRecord.exitDate = record.exitDate;
+              if (record.quantity !== undefined) cleanRecord.quantity = record.quantity;
+              if (record.buyValue !== undefined) cleanRecord.buyValue = record.buyValue;
+              if (record.sellValue !== undefined) cleanRecord.sellValue = record.sellValue;
+              if (record.profit !== undefined) cleanRecord.profit = record.profit;
+              if (record.periodOfHolding !== undefined) cleanRecord.periodOfHolding = record.periodOfHolding;
+              if (record.fairMarketValue !== undefined) cleanRecord.fairMarketValue = record.fairMarketValue;
+              if (record.taxableProfit !== undefined) cleanRecord.taxableProfit = record.taxableProfit;
+              if (record.turnover !== undefined) cleanRecord.turnover = record.turnover;
+              if (record.brokerage !== undefined) cleanRecord.brokerage = record.brokerage;
+              if (record.exchangeTransactionCharges !== undefined) cleanRecord.exchangeTransactionCharges = record.exchangeTransactionCharges;
+              if (record.ipft !== undefined) cleanRecord.ipft = record.ipft;
+              if (record.sebiCharges !== undefined) cleanRecord.sebiCharges = record.sebiCharges;
+              if (record.cgst !== undefined) cleanRecord.cgst = record.cgst;
+              if (record.sgst !== undefined) cleanRecord.sgst = record.sgst;
+              if (record.igst !== undefined) cleanRecord.igst = record.igst;
+              if (record.stampDuty !== undefined) cleanRecord.stampDuty = record.stampDuty;
+              if (record.stt !== undefined) cleanRecord.stt = record.stt;
+              return cleanRecord;
             });
-            insertedCount = results.length;
+            
+            // Insert records one by one to get better error reporting and ensure all valid records are inserted
+            for (const record of recordsToInsert) {
+              try {
+                await prisma.pnLRecord.create({
+                  data: record
+                });
+                insertedCount++;
+              } catch (individualError: any) {
+                // Check if this is a unique constraint violation (duplicate)
+                if (individualError.code === 'P2002') {
+                  skippedCount++;
+                  serviceLogger.logServiceOperation('PnL', 'processCSVFile', `Skipped duplicate record: ${record.symbol || 'N/A'} - ${record.instrumentType || 'N/A'}`);
+                } else {
+                  // Log other errors but continue processing
+                  serviceLogger.logServiceError('PnL', 'processCSVFile', individualError);
+                  serviceLogger.logServiceOperation('PnL', 'processCSVFile', `Failed to insert record: ${JSON.stringify(record).substring(0, 200)}`);
+                  skippedCount++;
+                }
+              }
+            }
+            serviceLogger.logServiceOperation('PnL', 'processCSVFile', `Inserted ${insertedCount} records (no existing records found)`);
           }
         } else {
           // Original duplicate prevention logic
           for (const record of results) {
             try {
+              // Create clean record with only the fields we need (explicitly exclude id, createdAt, updatedAt)
+              const cleanRecord = {
+                accountId: record.accountId,
+                instrumentType: record.instrumentType,
+                symbol: record.symbol,
+                isin: record.isin,
+                entryDate: record.entryDate,
+                exitDate: record.exitDate,
+                quantity: record.quantity,
+                buyValue: record.buyValue,
+                sellValue: record.sellValue,
+                profit: record.profit,
+                periodOfHolding: record.periodOfHolding,
+                fairMarketValue: record.fairMarketValue,
+                taxableProfit: record.taxableProfit,
+                turnover: record.turnover,
+                brokerage: record.brokerage,
+                exchangeTransactionCharges: record.exchangeTransactionCharges,
+                ipft: record.ipft,
+                sebiCharges: record.sebiCharges,
+                cgst: record.cgst,
+                sgst: record.sgst,
+                igst: record.igst,
+                stampDuty: record.stampDuty,
+                stt: record.stt
+              };
+              
               await prisma.pnLRecord.create({
-                data: record
+                data: cleanRecord
               });
               insertedCount++;
             } catch (error: any) {
@@ -773,11 +1140,21 @@ async function processCSVFile(filePath: string, accountId: number, skipDuplicate
       }
 
       // Clean up the uploaded file
+      if (fs.existsSync(filePath)) {
       fs.unlinkSync(filePath);
+      }
 
-      serviceLogger.logServiceOperation('PnL', 'processCSVFile', `Successfully processed CSV file with ${results.length} records`);
+      serviceLogger.logServiceOperation('PnL', 'processCSVFile', `Successfully processed CSV file with ${results.length} records, inserted ${insertedCount}, skipped ${skippedCount}`);
     } catch (dbError) {
       serviceLogger.logServiceError('PnL', 'saveRecords', dbError);
+      // Try to clean up the file even if there was an error
+      try {
+        if (fs.existsSync(filePath)) {
+          fs.unlinkSync(filePath);
+        }
+      } catch (cleanupError) {
+        serviceLogger.logServiceError('PnL', 'cleanupAfterError', cleanupError);
+      }
     }
 
   } catch (error) {
@@ -931,5 +1308,117 @@ async function parseCSVFileForDuplicates(filePath: string): Promise<any[]> {
     throw error;
   }
 }
+
+// Extract Excel worksheets to CSV files
+router.post('/extract-excel', excelUpload.single('file'), async (req, res) => {
+  try {
+    if (!req.file) {
+      return res.status(400).json({ error: 'No file uploaded' });
+    }
+
+    const tempDir = path.join(__dirname, '../../uploads/temp');
+    if (!fs.existsSync(tempDir)) {
+      fs.mkdirSync(tempDir, { recursive: true });
+    }
+
+    // Read the Excel file
+    const workbook = XLSX.readFile(req.file.path);
+    const sheetNames = workbook.SheetNames;
+    const excelBaseName = path.basename(req.file.path, path.extname(req.file.path));
+    
+    const extractedFiles: Array<{ name: string; path: string; sheetName: string }> = [];
+
+    // Convert each sheet to CSV
+    for (const sheetName of sheetNames) {
+      try {
+        const worksheet = workbook.Sheets[sheetName];
+        const csvData = XLSX.utils.sheet_to_csv(worksheet);
+        
+        // Create a safe filename from sheet name
+        const safeSheetName = sheetName.replace(/[<>:"/\\|?*]/g, '_').trim();
+        const csvFileName = `${excelBaseName}-${safeSheetName}.csv`;
+        const csvFilePath = path.join(tempDir, csvFileName);
+        
+        // Write CSV file
+        fs.writeFileSync(csvFilePath, csvData, 'utf8');
+        
+        extractedFiles.push({
+          name: csvFileName,
+          path: csvFilePath,
+          sheetName: sheetName
+        });
+      } catch (error) {
+        serviceLogger.logServiceError('PnL', 'extractExcelSheet', error);
+        // Continue with other sheets even if one fails
+      }
+    }
+
+    // Clean up the uploaded Excel file
+    fs.unlinkSync(req.file.path);
+
+    res.json({
+      message: 'Excel file extracted successfully',
+      extractedFiles: extractedFiles.map(f => ({
+        name: f.name,
+        sheetName: f.sheetName
+      }))
+    });
+
+  } catch (error) {
+    serviceLogger.logServiceError('PnL', 'extractExcel', error);
+    res.status(500).json({ error: 'Failed to extract Excel file' });
+  }
+});
+
+// Upload CSV file from temp directory by filename
+router.post('/upload-csv-from-temp', async (req, res) => {
+  try {
+    const { fileName, accountId, skipDuplicates } = req.body;
+
+    if (!fileName || !accountId) {
+      return res.status(400).json({ error: 'File name and account ID are required' });
+    }
+
+    const tempDir = path.join(__dirname, '../../uploads/temp');
+    const csvFilePath = path.join(tempDir, fileName);
+
+    if (!fs.existsSync(csvFilePath)) {
+      return res.status(404).json({ error: 'CSV file not found in temp directory' });
+    }
+
+    // Verify account exists
+    const account = await prisma.account.findUnique({
+      where: { id: parseInt(accountId) }
+    });
+
+    if (!account) {
+      return res.status(404).json({ error: 'Account not found' });
+    }
+
+    // Process the CSV file
+    processCSVFile(csvFilePath, parseInt(accountId), skipDuplicates === true);
+
+    // Clean up the temp CSV file after processing
+    setTimeout(() => {
+      try {
+        if (fs.existsSync(csvFilePath)) {
+          fs.unlinkSync(csvFilePath);
+        }
+      } catch (error) {
+        serviceLogger.logServiceError('PnL', 'cleanupTempFile', error);
+      }
+    }, 5000); // Wait 5 seconds before cleanup to ensure processing started
+
+    res.json({ 
+      message: 'CSV file uploaded successfully', 
+      accountId: parseInt(accountId),
+      status: 'processing'
+    });
+
+  } catch (error) {
+    serviceLogger.logServiceError('PnL', 'uploadCsvFromTemp', error);
+    res.status(500).json({ error: 'Failed to upload CSV file' });
+  }
+});
 
 export default router;
