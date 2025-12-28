@@ -37,14 +37,6 @@ const Layout: React.FC<LayoutProps> = ({ children }) => {
         { name: 'Holding Category Mapping', href: '/holdingCategoryMapping', icon: TagIcon },
       ]
     },
-    { 
-      name: 'Performance', 
-      icon: CurrencyDollarIcon,
-      children: [
-        { name: 'P&L', href: '/pnl', icon: CurrencyDollarIcon },
-        { name: 'Dividends', href: '/dividends', icon: CurrencyDollarIcon },
-      ]
-    },
   ];
 
   const renderNavigationItem = (item: any, isMobile: boolean = false) => {

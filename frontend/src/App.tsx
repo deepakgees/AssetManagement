@@ -2,8 +2,6 @@ import React from 'react';
 import { BrowserRouter as Router, Routes, Route } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import Accounts from './pages/Accounts';
-import PnL from './pages/PnL';
-import Dividends from './pages/Dividends';
 import SymbolMargins from './pages/SymbolMargins';
 import HistoricalData from './pages/HistoricalData';
 import FamilyDetails from './pages/FamilyDetails';
@@ -27,8 +25,6 @@ function App() {
           <Routes>
             <Route path="/" element={<Accounts />} />
             <Route path="/accounts" element={<Accounts />} />
-            <Route path="/pnl" element={<PnL />} />
-            <Route path="/dividends" element={<Dividends />} />
             <Route path="/symbolMargins" element={<SymbolMargins />} />
             <Route path="/historicalData" element={<HistoricalData />} />
             <Route path="/family/:familyName" element={<FamilyDetails />} />

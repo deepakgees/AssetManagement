@@ -170,6 +170,22 @@ class PnLService {
     return response.data;
   }
 
+  // Parse and check duplicates for CSV files from temp directory
+  async parseAndCheckDuplicatesTemp(fileNames: string[], accountId: number): Promise<{
+    totalRecords: number;
+    duplicateCount: number;
+    duplicates: any[];
+    uniqueRecords: number;
+    recordsByInstrumentType?: Record<string, { total: number; duplicates: number; unique: number }>;
+    parsedRecords?: any[];
+  }> {
+    const response = await axios.post(`${API_BASE_URL}/pnl/parse-and-check-duplicates-temp/${accountId}`, {
+      fileNames
+    });
+
+    return response.data;
+  }
+
   // Upload CSV file from temp directory
   async uploadCsvFromTemp(fileName: string, accountId: number, skipDuplicates: boolean = false): Promise<{
     message: string;

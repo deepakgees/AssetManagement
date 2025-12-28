@@ -64,13 +64,13 @@ const MonthlyPnLTable: React.FC<MonthlyPnLTableProps> = ({ records }) => {
     return `Account ${record.accountId || record.id}`;
   };
 
-  // Get the last 6 months (excluding current month)
-  const getLast6Months = () => {
+  // Get the last 12 months (excluding current month)
+  const getLast12Months = () => {
     const months: Array<{ label: string; startDate: Date; endDate: Date; key: string }> = [];
     const now = new Date();
     
-    // Start from 6 months ago and go up to 1 month ago (excluding current month)
-    for (let i = 6; i >= 1; i--) {
+    // Start from 12 months ago and go up to 1 month ago (excluding current month)
+    for (let i = 12; i >= 1; i--) {
       const date = new Date(now.getFullYear(), now.getMonth() - i, 1);
       const endDate = new Date(now.getFullYear(), now.getMonth() - i + 1, 0);
       const monthName = date.toLocaleDateString('en-US', { month: 'long' }); // Full month name (e.g., "June")
@@ -85,6 +85,21 @@ const MonthlyPnLTable: React.FC<MonthlyPnLTableProps> = ({ records }) => {
     }
     
     return months;
+  };
+
+  // Get current month data
+  const getCurrentMonth = () => {
+    const now = new Date();
+    const date = new Date(now.getFullYear(), now.getMonth(), 1);
+    const endDate = new Date(now.getFullYear(), now.getMonth() + 1, 0);
+    const monthName = date.toLocaleDateString('en-US', { month: 'long' });
+    const year = date.getFullYear();
+    const yearShort = year.toString().slice(-2);
+    const monthNum = date.getMonth() + 1;
+    const label = `${monthName}-${yearShort}`;
+    const key = `${year}-${String(monthNum).padStart(2, '0')}`;
+    
+    return { label, startDate: date, endDate, key };
   };
 
   const getMonthKey = (dateString: string): string => {
@@ -104,7 +119,8 @@ const MonthlyPnLTable: React.FC<MonthlyPnLTableProps> = ({ records }) => {
 
   // Calculate monthly data with member breakdown
   const monthlyData = useMemo(() => {
-    const months = getLast6Months();
+    const months = getLast12Months();
+    const currentMonth = getCurrentMonth();
     const categories = new Set<string>();
     const accountNames = new Set<string>();
     
@@ -124,8 +140,8 @@ const MonthlyPnLTable: React.FC<MonthlyPnLTableProps> = ({ records }) => {
       accountColorMap[account] = memberColors[index % memberColors.length];
     });
     
-    // Calculate data for each month with member breakdown
-    const data = months.map(month => {
+    // Helper function to calculate month data
+    const calculateMonthData = (month: { label: string; startDate: Date; endDate: Date; key: string }) => {
       const monthRecords = records.filter(record => {
         const recordDate = record.exitDate || record.entryDate || '';
         if (!recordDate) return false;
@@ -171,7 +187,13 @@ const MonthlyPnLTable: React.FC<MonthlyPnLTableProps> = ({ records }) => {
         netEarnings,
         netEarningsByAccount
       };
-    });
+    };
+    
+    // Calculate data for each month with member breakdown (excluding current month for averages)
+    const data = months.map(month => calculateMonthData(month));
+    
+    // Calculate current month data separately (not included in averages)
+    const currentMonthData = calculateMonthData(currentMonth);
     
     // Calculate totals
     const totals: Record<string, number> = {};
@@ -224,6 +246,7 @@ const MonthlyPnLTable: React.FC<MonthlyPnLTableProps> = ({ records }) => {
     
     return {
       months: data,
+      currentMonth: currentMonthData,
       categories: categoryList,
       accounts: accountList,
       accountColorMap,
@@ -423,16 +446,6 @@ const MonthlyPnLTable: React.FC<MonthlyPnLTableProps> = ({ records }) => {
               {renderNetEarningsCell(row)}
             </tr>
           ))}
-          {/* Total Row */}
-          <tr className="bg-gray-100 font-semibold">
-            <td className="px-4 py-3 whitespace-nowrap text-sm font-bold text-gray-900 border-t-2 border-gray-400 border border-gray-300">
-              Total
-            </td>
-            {monthlyData.categories.map(category => 
-              renderCellWithBreakdown(category, null, true)
-            )}
-            {renderNetEarningsCell(null, true)}
-          </tr>
           {/* Average Row */}
           <tr className="bg-blue-50 font-semibold">
             <td className="px-4 py-3 whitespace-nowrap text-sm font-bold text-gray-900 border-t border-gray-300 border border-gray-300">
@@ -442,6 +455,16 @@ const MonthlyPnLTable: React.FC<MonthlyPnLTableProps> = ({ records }) => {
               renderCellWithBreakdown(category, null, false, true)
             )}
             {renderNetEarningsCell(null, false, true)}
+          </tr>
+          {/* Current Month Row */}
+          <tr className="bg-green-50 font-semibold">
+            <td className="px-4 py-3 whitespace-nowrap text-sm font-bold text-gray-900 border-t border-gray-300 border border-gray-300">
+              {monthlyData.currentMonth.month} (Current)
+            </td>
+            {monthlyData.categories.map(category => 
+              renderCellWithBreakdown(category, monthlyData.currentMonth)
+            )}
+            {renderNetEarningsCell(monthlyData.currentMonth)}
           </tr>
         </tbody>
       </table>

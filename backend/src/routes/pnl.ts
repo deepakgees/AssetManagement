@@ -609,9 +609,233 @@ router.post('/parse-and-check-duplicates/:accountId', upload.single('file'), asy
   }
 });
 
+// Function to process dividend CSV file (reused from dividends.ts logic)
+async function processDividendCSVFile(filePath: string, accountId: number, skipDuplicates: boolean = false) {
+  try {
+    const results: any[] = [];
+    let headers: string[] = [];
+    let isDataSection = false;
+    let foundHeaderRow = false;
+    let totalRecords = 0;
+    let skippedRecords = 0;
+
+    const fileContent = fs.readFileSync(filePath, 'utf8');
+    const lines = fileContent.split('\n');
+
+    serviceLogger.logServiceOperation('PnL', 'processDividendCSVFile', `Processing dividend file with ${lines.length} lines`);
+
+    for (let lineIndex = 0; lineIndex < lines.length; lineIndex++) {
+      const line = lines[lineIndex];
+      const trimmedLine = line.trim();
+      
+      if (!trimmedLine) continue;
+
+      // Check if this is the dividend data section
+      if (trimmedLine.includes('Equity Dividends from') || (trimmedLine.includes('Dividend') && !trimmedLine.includes('Symbol'))) {
+        isDataSection = true;
+        serviceLogger.logServiceOperation('PnL', 'processDividendCSVFile', `Found dividend section at line ${lineIndex + 1}: ${trimmedLine}`);
+        continue;
+      }
+
+      // If we're in the data section and this line has comma-separated values
+      if (isDataSection && trimmedLine && trimmedLine.includes(',')) {
+        const values = trimmedLine.split(',');
+        totalRecords++;
+
+        // Check if this is the header row
+        if (values.length > 1 && values[0].trim() === 'Symbol') {
+          headers = values.map(h => h.trim());
+          foundHeaderRow = true;
+          serviceLogger.logServiceOperation('PnL', 'processDividendCSVFile', `Found header row at line ${lineIndex + 1}: ${headers.join(', ')}`);
+          continue;
+        }
+
+        // Skip if we haven't found the header row yet
+        if (!foundHeaderRow) {
+          serviceLogger.logServiceOperation('PnL', 'processDividendCSVFile', `Skipping line ${lineIndex + 1} - no header row found yet`);
+          continue;
+        }
+
+        // Skip if this is not a data row
+        if (values[0].trim() === 'Total Dividend Amount' || 
+            values[0].trim() === '' || 
+            values[0].trim().toLowerCase().includes('total') ||
+            values[0].trim().toLowerCase().includes('dividends are credited')) {
+          serviceLogger.logServiceOperation('PnL', 'processDividendCSVFile', `Skipping summary row at line ${lineIndex + 1}: ${values[0].trim()}`);
+          continue;
+        }
+
+        // Enhanced validation: Skip records where Symbol is empty
+        const symbolValue = values[0]?.trim();
+        if (!symbolValue || symbolValue === '') {
+          skippedRecords++;
+          serviceLogger.logServiceOperation('PnL', 'processDividendCSVFile', `Skipping empty symbol at line ${lineIndex + 1}`);
+          continue;
+        }
+
+        // Additional validation: Check if this row has meaningful data
+        const hasMeaningfulData = values.some((value, index) => {
+          if (index === 0) return true; // Symbol is already checked
+          const trimmedValue = value?.trim();
+          return trimmedValue && trimmedValue !== '' && trimmedValue !== '0';
+        });
+
+        if (!hasMeaningfulData) {
+          skippedRecords++;
+          serviceLogger.logServiceOperation('PnL', 'processDividendCSVFile', `Skipping row with no meaningful data at line ${lineIndex + 1}`);
+          continue;
+        }
+
+        // Create record object
+        const record: any = {
+          accountId,
+        };
+
+        // Map values to record fields
+        headers.forEach((header, index) => {
+          if (index < values.length) {
+            const value = values[index]?.trim();
+            
+            switch (header) {
+              case 'Symbol':
+                record.symbol = value;
+                break;
+              case 'ISIN':
+                record.isin = value;
+                break;
+              case 'Ex-date':
+                record.exDate = value ? new Date(value) : null;
+                break;
+              case 'Quantity':
+                record.quantity = value ? parseFloat(value) : null;
+                break;
+              case 'Dividend Per Share':
+                record.dividendPerShare = value ? parseFloat(value) : null;
+                break;
+              case 'Net Dividend Amount':
+                record.netDividendAmount = value ? parseFloat(value) : null;
+                break;
+            }
+          }
+        });
+
+        // Final validation: Ensure we have at least a symbol and some meaningful data
+        if (record.symbol && (record.quantity || record.dividendPerShare || record.netDividendAmount)) {
+          results.push(record);
+          serviceLogger.logServiceOperation('PnL', 'processDividendCSVFile', `Added record at line ${lineIndex + 1}: ${record.symbol} - Qty: ${record.quantity}, DPS: ${record.dividendPerShare}, Amount: ${record.netDividendAmount}`);
+        } else {
+          skippedRecords++;
+          serviceLogger.logServiceOperation('PnL', 'processDividendCSVFile', `Skipping invalid record at line ${lineIndex + 1}: ${JSON.stringify(record)}`);
+        }
+      }
+    }
+
+    serviceLogger.logServiceOperation('PnL', 'processDividendCSVFile', `Parsed ${results.length} valid dividend records from ${totalRecords} total records (skipped ${skippedRecords} empty/invalid records)`);
+
+    // Insert records with duplicate prevention
+    if (results.length > 0) {
+      let insertedCount = 0;
+      let skippedCount = 0;
+      
+      if (skipDuplicates) {
+        // Get existing records to filter out duplicates before insertion
+        const existingRecords = await prisma.dividendRecord.findMany({
+          where: { accountId },
+          select: {
+            symbol: true,
+            isin: true,
+            exDate: true,
+            quantity: true,
+            dividendPerShare: true,
+            netDividendAmount: true
+          }
+        });
+
+        if (existingRecords.length > 0) {
+          // Filter out duplicates
+          const uniqueRecords = results.filter(record => {
+            return !existingRecords.some(existing => 
+              existing.symbol === record.symbol &&
+              existing.isin === record.isin &&
+              existing.exDate?.getTime() === record.exDate?.getTime() &&
+              existing.quantity === record.quantity &&
+              existing.dividendPerShare === record.dividendPerShare &&
+              existing.netDividendAmount === record.netDividendAmount
+            );
+          });
+
+          skippedCount = results.length - uniqueRecords.length;
+          
+          // Insert only unique records
+          if (uniqueRecords.length > 0) {
+            await prisma.dividendRecord.createMany({
+              data: uniqueRecords
+            });
+            insertedCount = uniqueRecords.length;
+          }
+        } else {
+          // No existing records, insert all
+          await prisma.dividendRecord.createMany({
+            data: results
+          });
+          insertedCount = results.length;
+        }
+      } else {
+        // Original duplicate prevention logic
+        for (const record of results) {
+          try {
+            await prisma.dividendRecord.create({
+              data: record
+            });
+            insertedCount++;
+          } catch (error: any) {
+            // Check if this is a unique constraint violation (duplicate)
+            if (error.code === 'P2002' && error.meta?.target?.includes('unique_dividend_record')) {
+              skippedCount++;
+              serviceLogger.logServiceOperation('PnL', 'processDividendCSVFile', `Skipped duplicate record: ${record.symbol} - ${record.exDate}`);
+            } else {
+              // Re-throw if it's not a duplicate error
+              throw error;
+            }
+          }
+        }
+      }
+      
+      serviceLogger.logServiceOperation('PnL', 'processDividendCSVFile', `Inserted ${insertedCount} new records, skipped ${skippedCount} duplicates`);
+    } else {
+      serviceLogger.logServiceOperation('PnL', 'processDividendCSVFile', `No valid records found to insert`);
+    }
+
+    // Clean up the uploaded file
+    if (fs.existsSync(filePath)) {
+      fs.unlinkSync(filePath);
+    }
+
+    serviceLogger.logServiceOperation('PnL', 'processDividendCSVFile', `Successfully processed dividend CSV file with ${results.length} records`);
+  } catch (error) {
+    serviceLogger.logServiceError('PnL', 'processDividendCSVFile', error);
+    
+    // Clean up the uploaded file even if processing failed
+    try {
+      if (fs.existsSync(filePath)) {
+        fs.unlinkSync(filePath);
+      }
+    } catch (cleanupError) {
+      serviceLogger.logServiceError('PnL', 'dividendFileCleanup', cleanupError);
+    }
+  }
+}
+
 // Function to process CSV file
 async function processCSVFile(filePath: string, accountId: number, skipDuplicates: boolean = false) {
   try {
+    // Check if this is a dividend file
+    if (isDividendFile(filePath)) {
+      serviceLogger.logServiceOperation('PnL', 'processCSVFile', `Detected dividend file, routing to dividend processor`);
+      return await processDividendCSVFile(filePath, accountId, skipDuplicates);
+    }
+
+    // Otherwise, use P&L processor
     const results: any[] = [];
     let currentInstrumentType = '';
     let isHeaderRow = false;
@@ -1161,9 +1385,168 @@ async function processCSVFile(filePath: string, accountId: number, skipDuplicate
   }
 }
 
+// Helper function to detect if a CSV file is a dividend file
+function isDividendFile(filePath: string): boolean {
+  try {
+    const fileContent = fs.readFileSync(filePath, 'utf8');
+    const lines = fileContent.split('\n');
+    
+    // Check first 50 lines for dividend indicators
+    for (let i = 0; i < Math.min(50, lines.length); i++) {
+      const trimmedLine = lines[i].trim();
+      
+      // Check for dividend section markers
+      if (trimmedLine.includes('Equity Dividends from') || 
+          (trimmedLine.includes('Dividend') && trimmedLine.includes('Per Share')) ||
+          trimmedLine.includes('Dividend Per Share')) {
+        return true;
+      }
+      
+      // Check for dividend header row
+      if (trimmedLine.includes('Symbol') && trimmedLine.includes('Dividend Per Share')) {
+        return true;
+      }
+    }
+    
+    return false;
+  } catch (error) {
+    serviceLogger.logServiceError('PnL', 'isDividendFile', error);
+    return false;
+  }
+}
+
+// Function to parse dividend CSV file for duplicate checking (reused from dividends.ts logic)
+async function parseDividendCSVFileForDuplicates(filePath: string): Promise<any[]> {
+  try {
+    const results: any[] = [];
+    let headers: string[] = [];
+    let isDataSection = false;
+    let foundHeaderRow = false;
+    let totalRecords = 0;
+    let skippedRecords = 0;
+
+    const fileContent = fs.readFileSync(filePath, 'utf8');
+    const lines = fileContent.split('\n');
+
+    serviceLogger.logServiceOperation('PnL', 'parseDividendCSVFileForDuplicates', `Processing dividend file with ${lines.length} lines`);
+
+    for (let lineIndex = 0; lineIndex < lines.length; lineIndex++) {
+      const line = lines[lineIndex];
+      const trimmedLine = line.trim();
+      
+      if (!trimmedLine) continue;
+
+      // Check if this is the dividend data section
+      if (trimmedLine.includes('Equity Dividends from') || (trimmedLine.includes('Dividend') && !trimmedLine.includes('Symbol'))) {
+        isDataSection = true;
+        serviceLogger.logServiceOperation('PnL', 'parseDividendCSVFileForDuplicates', `Found dividend section at line ${lineIndex + 1}: ${trimmedLine}`);
+        continue;
+      }
+
+      // If we're in the data section and this line has comma-separated values
+      if (isDataSection && trimmedLine && trimmedLine.includes(',')) {
+        const values = trimmedLine.split(',');
+        totalRecords++;
+
+        // Check if this is the header row
+        if (values.length > 1 && values[0].trim() === 'Symbol') {
+          headers = values.map(h => h.trim());
+          foundHeaderRow = true;
+          serviceLogger.logServiceOperation('PnL', 'parseDividendCSVFileForDuplicates', `Found header row at line ${lineIndex + 1}: ${headers.join(', ')}`);
+          continue;
+        }
+
+        // Skip if we haven't found the header row yet
+        if (!foundHeaderRow) {
+          continue;
+        }
+
+        // Skip if this is not a data row
+        if (values[0].trim() === 'Total Dividend Amount' || 
+            values[0].trim() === '' || 
+            values[0].trim().toLowerCase().includes('total') ||
+            values[0].trim().toLowerCase().includes('dividends are credited')) {
+          continue;
+        }
+
+        // Skip records where Symbol is empty
+        const symbolValue = values[0]?.trim();
+        if (!symbolValue || symbolValue === '') {
+          skippedRecords++;
+          continue;
+        }
+
+        // Additional validation: Check if this row has meaningful data
+        const hasMeaningfulData = values.some((value, index) => {
+          if (index === 0) return true; // Symbol is already checked
+          const trimmedValue = value?.trim();
+          return trimmedValue && trimmedValue !== '' && trimmedValue !== '0';
+        });
+
+        if (!hasMeaningfulData) {
+          skippedRecords++;
+          continue;
+        }
+
+        // Create record object
+        const record: any = {};
+
+        // Map values to record fields
+        headers.forEach((header, index) => {
+          if (index < values.length) {
+            const value = values[index]?.trim();
+            
+            switch (header) {
+              case 'Symbol':
+                record.symbol = value;
+                break;
+              case 'ISIN':
+                record.isin = value;
+                break;
+              case 'Ex-date':
+                record.exDate = value ? new Date(value) : null;
+                break;
+              case 'Quantity':
+                record.quantity = value ? parseFloat(value) : null;
+                break;
+              case 'Dividend Per Share':
+                record.dividendPerShare = value ? parseFloat(value) : null;
+                break;
+              case 'Net Dividend Amount':
+                record.netDividendAmount = value ? parseFloat(value) : null;
+                break;
+            }
+          }
+        });
+
+        // Final validation: Ensure we have at least a symbol and some meaningful data
+        if (record.symbol && (record.quantity || record.dividendPerShare || record.netDividendAmount)) {
+          results.push(record);
+        } else {
+          skippedRecords++;
+        }
+      }
+    }
+
+    serviceLogger.logServiceOperation('PnL', 'parseDividendCSVFileForDuplicates', `Parsed ${results.length} valid dividend records from ${totalRecords} total records (skipped ${skippedRecords} empty/invalid records)`);
+    return results;
+
+  } catch (error) {
+    serviceLogger.logServiceError('PnL', 'parseDividendCSVFileForDuplicates', error);
+    throw error;
+  }
+}
+
 // Function to parse CSV file for duplicate checking (without saving to database)
 async function parseCSVFileForDuplicates(filePath: string): Promise<any[]> {
   try {
+    // Check if this is a dividend file
+    if (isDividendFile(filePath)) {
+      serviceLogger.logServiceOperation('PnL', 'parseCSVFileForDuplicates', `Detected dividend file, using dividend parser`);
+      return await parseDividendCSVFileForDuplicates(filePath);
+    }
+
+    // Otherwise, use P&L parser
     const results: any[] = [];
     let currentInstrumentType = '';
     let isHeaderRow = false;
@@ -1366,6 +1749,175 @@ router.post('/extract-excel', excelUpload.single('file'), async (req, res) => {
   } catch (error) {
     serviceLogger.logServiceError('PnL', 'extractExcel', error);
     res.status(500).json({ error: 'Failed to extract Excel file' });
+  }
+});
+
+// Parse and check duplicates for CSV file from temp directory
+router.post('/parse-and-check-duplicates-temp/:accountId', async (req, res) => {
+  try {
+    const { fileNames } = req.body; // Array of file names
+    const accountId = parseInt(req.params.accountId);
+
+    if (!fileNames || !Array.isArray(fileNames) || fileNames.length === 0) {
+      return res.status(400).json({ error: 'File names array is required' });
+    }
+
+    if (!accountId) {
+      return res.status(400).json({ error: 'Account ID is required' });
+    }
+
+    // Verify account exists
+    const account = await prisma.account.findUnique({
+      where: { id: accountId }
+    });
+
+    if (!account) {
+      return res.status(404).json({ error: 'Account not found' });
+    }
+
+    const tempDir = path.join(__dirname, '../../uploads/temp');
+    let allParsedRecords: any[] = [];
+    let allDuplicates: any[] = [];
+    let pnlRecords: any[] = [];
+    let dividendRecords: any[] = [];
+
+    // Process each file
+    for (const fileName of fileNames) {
+      const csvFilePath = path.join(tempDir, fileName);
+      
+      if (!fs.existsSync(csvFilePath)) {
+        continue; // Skip if file doesn't exist
+      }
+
+      // Check if this is a dividend file
+      if (isDividendFile(csvFilePath)) {
+        // Parse as dividend file
+        const parsedRecords = await parseDividendCSVFileForDuplicates(csvFilePath);
+        dividendRecords.push(...parsedRecords);
+        allParsedRecords.push(...parsedRecords);
+      } else {
+        // Parse as P&L file
+        const parsedRecords = await parseCSVFileForDuplicates(csvFilePath);
+        pnlRecords.push(...parsedRecords);
+        allParsedRecords.push(...parsedRecords);
+      }
+    }
+
+    // Check duplicates for P&L records
+    const existingPnLRecords = await prisma.pnLRecord.findMany({
+      where: { accountId },
+      select: {
+        symbol: true,
+        instrumentType: true,
+        entryDate: true,
+        exitDate: true,
+        quantity: true,
+        buyValue: true,
+        sellValue: true,
+        profit: true
+      }
+    });
+
+    let pnlDuplicates: any[] = [];
+    if (existingPnLRecords.length > 0 && pnlRecords.length > 0) {
+      pnlDuplicates = pnlRecords.filter(record => {
+        return existingPnLRecords.some(existing => 
+          existing.symbol === record.symbol &&
+          existing.instrumentType === record.instrumentType &&
+          existing.entryDate?.getTime() === record.entryDate?.getTime() &&
+          existing.exitDate?.getTime() === record.exitDate?.getTime() &&
+          existing.quantity === record.quantity &&
+          existing.buyValue === record.buyValue &&
+          existing.sellValue === record.sellValue &&
+          existing.profit === record.profit
+        );
+      });
+    }
+
+    // Check duplicates for dividend records
+    const existingDividendRecords = await prisma.dividendRecord.findMany({
+      where: { accountId },
+      select: {
+        symbol: true,
+        isin: true,
+        exDate: true,
+        quantity: true,
+        dividendPerShare: true,
+        netDividendAmount: true
+      }
+    });
+
+    let dividendDuplicates: any[] = [];
+    if (existingDividendRecords.length > 0 && dividendRecords.length > 0) {
+      dividendDuplicates = dividendRecords.filter(record => {
+        return existingDividendRecords.some(existing => 
+          existing.symbol === record.symbol &&
+          existing.isin === record.isin &&
+          existing.exDate?.getTime() === record.exDate?.getTime() &&
+          existing.quantity === record.quantity &&
+          existing.dividendPerShare === record.dividendPerShare &&
+          existing.netDividendAmount === record.netDividendAmount
+        );
+      });
+    }
+
+    // Combine all duplicates
+    allDuplicates = [...pnlDuplicates, ...dividendDuplicates];
+
+    // Group records by instrument type (for P&L) or by type (for dividends)
+    const recordsByInstrumentType: Record<string, { total: number; duplicates: number; unique: number }> = {};
+    
+    // Group P&L records
+    pnlRecords.forEach(record => {
+      const instrumentType = record.instrumentType || 'Unknown';
+      if (!recordsByInstrumentType[instrumentType]) {
+        recordsByInstrumentType[instrumentType] = { total: 0, duplicates: 0, unique: 0 };
+      }
+      recordsByInstrumentType[instrumentType].total++;
+    });
+
+    // Group dividend records
+    if (dividendRecords.length > 0) {
+      if (!recordsByInstrumentType['Equity Dividends']) {
+        recordsByInstrumentType['Equity Dividends'] = { total: 0, duplicates: 0, unique: 0 };
+      }
+      recordsByInstrumentType['Equity Dividends'].total += dividendRecords.length;
+    }
+
+    // Count duplicates by instrument type
+    pnlDuplicates.forEach(duplicate => {
+      const instrumentType = duplicate.instrumentType || 'Unknown';
+      if (recordsByInstrumentType[instrumentType]) {
+        recordsByInstrumentType[instrumentType].duplicates++;
+      }
+    });
+
+    if (dividendDuplicates.length > 0) {
+      if (recordsByInstrumentType['Equity Dividends']) {
+        recordsByInstrumentType['Equity Dividends'].duplicates += dividendDuplicates.length;
+      }
+    }
+
+    // Calculate unique records by instrument type
+    Object.keys(recordsByInstrumentType).forEach(instrumentType => {
+      recordsByInstrumentType[instrumentType].unique = 
+        recordsByInstrumentType[instrumentType].total - recordsByInstrumentType[instrumentType].duplicates;
+    });
+
+    let totalRecords = allParsedRecords.length;
+
+    res.json({
+      totalRecords,
+      duplicateCount: allDuplicates.length,
+      duplicates: allDuplicates,
+      uniqueRecords: totalRecords - allDuplicates.length,
+      recordsByInstrumentType,
+      parsedRecords: allParsedRecords // Include all parsed records for preview
+    });
+
+  } catch (error) {
+    serviceLogger.logServiceError('PnL', 'parseAndCheckDuplicatesTemp', error);
+    res.status(500).json({ error: 'Failed to parse file and check duplicates' });
   }
 });
 

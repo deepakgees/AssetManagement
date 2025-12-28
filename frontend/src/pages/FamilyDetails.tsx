@@ -12,8 +12,11 @@ import {
   CalendarIcon,
   ChevronUpIcon,
   ChevronDownIcon,
+  BanknotesIcon,
+  ArrowTrendingUpIcon,
 } from '@heroicons/react/24/outline';
 import Layout from '../components/Layout';
+import PnLTabContent from '../components/PnLTabContent';
 import { getHoldings, getHoldingsSummary, type Holding } from '../services/holdingsService';
 import { getAccounts, type Account } from '../services/accountsService';
 import { getMarginsSummary, type Margin } from '../services/marginsService';
@@ -1862,6 +1865,26 @@ export default function FamilyDetails() {
               )}
             </button>
 
+            {/* P&L Tab */}
+            <button
+              onClick={() => setActiveTab('P&L')}
+              className={`flex-shrink-0 flex items-center space-x-2 py-3 px-1 transition-colors relative ${
+                activeTab === 'P&L'
+                  ? 'text-purple-600'
+                  : 'text-gray-600 hover:text-gray-800'
+              }`}
+            >
+              <div className="flex items-center space-x-2">
+                <CurrencyDollarIcon className={`h-5 w-5 ${activeTab === 'P&L' ? 'text-purple-600' : 'text-gray-600'}`} />
+                <span className={`text-sm font-medium ${activeTab === 'P&L' ? 'text-purple-600' : 'text-gray-600'}`}>
+                  P&L
+                </span>
+              </div>
+              {activeTab === 'P&L' && (
+                <div className="absolute bottom-0 left-0 right-0 h-0.5 bg-purple-600"></div>
+              )}
+            </button>
+
           </div>
         </div>
       </div>
@@ -1909,6 +1932,11 @@ export default function FamilyDetails() {
             getHoldingsSortIcon={getHoldingsSortIcon}
             sortedHoldings={sortedHoldings}
             accounts={accounts}
+          />
+        ) : activeTab === 'P&L' ? (
+          <PnLTabContent 
+            familyName={decodedFamilyName}
+            familyAccounts={familyAccounts}
           />
         ) : selectedAccountId ? (
           <PortfolioOverviewCard data={accountSummary} isLoading={accountSummaryLoading} />
